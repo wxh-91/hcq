@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Components - {{ config.title }}{% endblock %}
+
+{% block content %}
+<h1>Components</h1>
+<p>
+  Oat is an ultra-lightweight HTML + CSS + minimal JS, semantic UI component library with zero dependencies.
+  No framework or build or dev dependencies of any kind. Just include the tiny CSS and JS bundles.
+</p>
+<p>
+  Semantic tags and attributes are styled contextually out of the box without classes, thereby forcing best practices.
+  A few dynamic components are WebComponents.
+</p>
+
+<hr style="margin: var(--space-12) 0;" />
+
+{% for page in section.pages %}
+<section id="{{ page.slug }}" class="demo-section">
+  <h2># {{ page.title }}</h2>
+  {{ page.content | safe }}
+  <a href="{{ page.permalink }}" class="section-permalink" aria-label="Permalink to {{ page.title }} doc">Link</a>
+</section>
+{% endfor %}
+{% endblock %}

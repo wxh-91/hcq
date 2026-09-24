@@ -1,0 +1,50 @@
+@layer components {
+  ot-dropdown {
+    [popover] {
+      position: fixed;
+      margin: 0;
+      /* padding: var(--space-1); */
+      min-width: 12rem;
+      background-color: var(--background);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-medium);
+      box-shadow: var(--shadow-small);
+      opacity: 0;
+      transform: translateY(-4px);
+      transition:
+        opacity 150ms ease-out,
+        transform 150ms ease-out,
+        display 150ms allow-discrete,
+        overlay 150ms allow-discrete;
+
+      &:popover-open {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      @starting-style {
+        &:popover-open {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+      }
+
+      hr {
+        margin: var(--space-1) 0;
+      }
+    }
+
+    [role="menuitem"] {
+      display: flex;
+      width: 100%;
+      padding: var(--space-2) var(--space-3);
+      justify-content: start;
+      cursor: pointer;
+
+      &:hover, &:focus {
+        background-color: var(--accent);
+        outline: none;
+      }
+    }
+  }
+}

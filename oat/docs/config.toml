@@ -1,0 +1,10 @@
+base_url = "/"
+title = "Oat UI"
+compile_sass = false
+build_search_index = false
+
+[markdown]
+highlighting = { theme = "one-dark-pro" }
+
+[extra]
+description = "Oat - Ultra-lightweight, semantic, zero-dependency HTML UI component library"

@@ -1,0 +1,24 @@
+{
+  "strategies": {
+    "chat": {
+      "model": "glm-4-flash",
+      "base_url": "http://your-api-base:8000/v1",
+      "api_keys": ["sk-your-api-key-here"],
+      "description": "日常闲聊模型"
+    },
+    "tool": {
+      "model": "deepseek-flash",
+      "base_url": "http://your-api-base:8000/v1",
+      "api_keys": ["sk-your-api-key-here"],
+      "description": "复杂推理、工具调用模型"
+    },
+    "fallback": {
+      "model": "DeepSeek-V4-Pro",
+      "base_url": "https://your-backup-base/v1",
+      "api_keys": ["sk-your-backup-key-here"],
+      "description": "备用模型"
+    }
+  },
+  "default_strategy": "tool",
+  "tool_fallback_allowed": false
+}

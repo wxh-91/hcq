@@ -1,0 +1,26 @@
+{
+  "name": "@knadh/oat",
+  "version": "version-0.0.0",
+  "license": "MIT",
+  "author": "Kailash Nadh",
+  "homepage": "https://oat.ink",
+  "description": " Ultra-lightweight, zero dependency, semantic HTML/CSS/JS UI library",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/knadh/oat.git"
+  },
+  "keywords": ["ui", "components", "component-library"],
+
+  "files": [
+    "oat.min.css",
+    "oat.min.js",
+    "css",
+    "js"
+  ],
+
+  "main": "oat.min.js",
+  "style": "oat.min.css",
+
+  "unpkg": "oat.min.js",
+  "jsdelivr": "oat.min.js"
+}
