@@ -109,6 +109,10 @@
 │
 └── bot_utils/                     # 【工具函数包】
     ├── wj.py                      # 文件操作：读/写/删/改/插行，自动备份，路径安全处理
+    │                              # backup_project：依据 backup_manifest 动态打包项目，自动过滤黑名单与去重
+    ├── backup_manifest.py         # 备份清单管理：读 XMKJ.txt → 调 AI（tool 策略）解析 → 写 backup_manifest.json
+    │                              # 提供 is_manifest_stale()（mtime 比对）、refresh_manifest()、load_manifest()
+    │                              # 硬排除黑名单 BLACKLIST = ['backups', 'downloads']
     ├── xt.py                      # 系统操作：查看 CPU/内存/磁盘，执行 shell 命令（带超时），ping 检测
     ├── admin_gh.py                # 管理员管理：增删查（仅主管理员可操作）
     ├── downloader.py              # 视频下载：自动识别 m3u8 是否加密，支持 yt-dlp/FFmpeg 及加密流解密合并
@@ -170,3 +174,5 @@
 - 思考链：模型返回 reasoning_content 时打印到控制台，便于诊断 AI 决策过程。
 - 工具日志：每次工具执行输出「工具名 | 耗时 | 状态」到控制台。
 - 视频爬取：现有站点走语义解析（AI 判断），新站点走硬指令「爬取 <url>」（独立 Node 脚本链）。
+- 备份项目：硬指令「@备份项目」直接调 backup_project（跳过意图判断）；自然语言走 AI 语义映射
+            # backup_project 依据 XMKJ.txt（AI 解析）+ mtime 缓存，动态确定打包范围，不再硬编码文件清单
