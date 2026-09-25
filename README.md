@@ -19,6 +19,191 @@
 3. 配置模型策略：复制 models.json.example 为 models.json，填入模型配置
 4. 启动：python3 dz.py
 
+## 项目结构
+
+<!-- AUTO-STRUCTURE-START -->
+```
+项目根目录/
+│
+├── dz.py                          # 【QQ端主入口】NoneBot 消息分发器，处理 QQ 私聊/群聊消息、图片、文件
+│                                  # 群聊非管理员返回无权限提示；文件下载异常分层捕获并返回用户友好信息
+│                                  # 支持 @切换到pi / @切换到api 指令，在 API 和 Pi 后端间实时切换
+│                                  # 支持「爬取 <url>」硬指令，触发新站点视频下载
+│                                  # 支持全角星号 ＊ 分隔多任务，进入任务队列串行执行
+│                                  # 启动时清理过期情景记忆，Bot 连接后执行签到检查
+│
+├── admin.py                       # 【工具注册与路由】所有 AI 可调用工具的注册表，以及工具执行入口
+│                                  # 工具参数自动类型转换（str→int/bool）；异常分层捕获（TypeError/ValueError/TimeoutError）
+│                                  # 所有异常记录完整堆栈日志；工具成功执行后触发加分（白名单）
+│                                  # 每次工具执行输出「工具名 | 耗时 | 状态」日志
+│                                  # 注册工具：checkin、query_knowledge、get_xmkj、agent_manager、read_file、
+│                                  # write_file、replace_line、delete_line、insert_line、ping_host、
+│                                  # backup_project、execute_shell、system_status、list_admin、add_admin、
+│                                  # del_admin、set_group_chat_enabled、get_group_chat_status、download_m3u8、
+│                                  # run_bash_script、recall_conversation
+│                                  # 快速硬指令：备份项目、系统状态、管理员列表
+│
+├── ai.py                          # 【AI 核心引擎】对话管理、历史压缩、多 API Key 轮询、TodoList 规划器、子代理
+│                                  # tool_calls 标准流程（AI初始回复→执行工具→提交结果→AI最终总结）
+│                                  # 语义意图判断：deepseek-flash 判断「tool / chat」，工具走 deepseek，闲聊走 glm
+│                                  # 思考链打印：模型返回 reasoning_content 时输出到控制台
+│                                  # SYSTEM_PROMPT 含 XMKJ 规则、图片处理规则、输出格式规则
+│                                  # 加载 profile.md，注入身份与偏好到 system prompt
+│                                  # 非工具路径保存对话历史，触发情景记忆落盘检查
+│                                  # 集成 pi_integration，根据当前模式选择调用 API 或 Pi 后端
+│
+├── pi_integration.py              # 【Pi 后端封装层】管理 Pi 进程生命周期、模式切换、工具注册与调用
+│                                  # 提供 init_pi_backend()、close_pi_backend()、ask_pi()、set_mode()、get_mode()
+│                                  # 懒初始化：仅在切换到 Pi 模式时启动子进程
+│                                  # 流式滑窗超时机制，处理大数据量输出，防止管道堵塞
+│
+├── memory.py                      # 【持久化存储】基于 JSON 的内存管理，保存管理员列表、群聊开关、长期记忆
+│                                  # 提供 load_profile() 读取 profile.md
+│                                  # save 函数含写入异常处理和临时文件清理；KnowledgeDB 类管理 SQLite 知识库
+│
+├── cl.py                          # 【配置加载】读取 .env 环境变量，加载 API Key 列表、基础 URL、默认管理员
+│                                  # 含 MODEL_NAME、BACKUP_BASE、BACKUP_KEY；提供 load_models_config()、
+│                                  # get_strategy_config()、detect_strategy() 函数
+│
+├── models.json                    # 【多模型策略配置】定义 chat/tool/fallback 三种策略的模型、地址、密钥、超时、重试
+│                                  # chat 策略：glm-4-flash（日常闲聊）
+│                                  # tool 策略：deepseek-flash（推理与工具调用）
+│                                  # fallback 策略：备用模型
+│
+├── tool_server.py                 # 【历史遗留】Socket 服务端，监听 127.0.0.1:9999
+│                                  # 接收 Pi 扩展发来的工具调用请求，调用 execute_tool_directly 执行并返回结果
+│
+├── ocr.py                         # 【图像识别】异步下载图片，调用 PaddleOCR 提取文字，支持重试和对比度增强
+│
+├── web_server.py                  # 【Web 服务】（暂时废弃）FastAPI + WebSocket，提供前端交互界面
+│                                  # 当前不参与核心运行，保留代码但不启用
+│
+├── web_ui.html                    # 【前端页面】（暂时废弃）纯对话流 Web 终端交互界面
+│                                  # 当前不参与核心运行，保留代码但不启用
+│
+├── fetch_by_id.js                 # 【新站点爬取入口】Node 脚本，输入视频页 URL 或 id
+│                                  # 正则抠 id → 读取 cookies.json → 调详情 API → XOR 解密 → 提取 m3u8
+│                                  # 自动调用 download_video.js 完成下载
+│
+├── download_video.js              # 【新站点分片下载】Node 脚本，输入 m3u8 URL
+│                                  # 解析 #EXT-X-KEY → 下载 key 文件（兼容 16B/32B hex）→ 逐个下载分片
+│                                  # AES-128-CBC 解密 → 合并为 video.ts → 校验 TS 同步字节
+│
+├── diag.js                        # 【新站点 cookie 刷新】Playwright 无头浏览器打开详情页
+│                                  # 等待 90 秒让 JS 挑战跑完 → 拿到 js_challenge_passed → cookies.json
+│
+├── profile.md                     # 【主人档案】身份与偏好文件，手动维护，启动时加载进 system prompt
+│                                  # 分「身份」和「偏好」两节，内容由用户定义
+│
+├── pi_backend/                    # 【Pi RPC 通信包】独立子包，提供与 Pi 子进程的 RPC 通信和工具调用协议
+│   ├── __init__.py               # 导出 PIProcess、PIToolBackend、PIBackend
+│   ├── core/                     # 核心模块
+│   │   ├── __init__.py
+│   │   ├── pi_process.py         # 子进程管理（启动/读写/关闭）
+│   │   ├── pi_tool_backend.py    # 工具调用 Socket 后端（注册/执行/响应）
+│   │   └── pi_backend.py         # 高层封装（33 种 RPC 指令发送 + 读取响应）
+│   └── models/                   # RPC 命令/响应模型、工具事件模型（基于 Pydantic）
+│       ├── __init__.py
+│       ├── base_event.py
+│       ├── _internal/            # 内部辅助模型（ToolResultChunk、ToolEndFlag）
+│       ├── rpc_events/           # 33 个命令类 + 33 个响应类
+│       │   ├── base_rpc_event.py
+│       │   ├── client_events/    # 33 个命令定义
+│       │   └── server_events/    # 33 个响应定义
+│       └── tool_events/          # 工具事件（ToolExecution、ToolResult、ToolExecutionEnd）
+│
+├── memory.json                    # 【运行时数据】存储管理员、群聊状态、长期记忆、episodic_state 计数器
+│
+├── scores.json                    # 【工具分数】记录每个白名单工具的成功次数与最近成功时间
+│                                  # 字段：score、last_success、success_count
+│
+├── episodic.log                   # 【情景记忆】当天所有对话记录（user / assistant / tool）
+│                                  # 每行 JSON：ts、date、turn、role、content
+│                                  # 跨天时启动自动清理，只保留当天
+│
+├── checkin_state.json             # 【签到状态】记录今日是否已签到、签到时间、获得额度
+│
+├── knowledge.db                   # 【知识库数据库】SQLite 文件，存储 user_preferences、solution_history、conversation_summary
+│
+├── .env                           # 【环境变量】存放 NEWAPI_BASE、NEWAPI_KEY、MODEL_NAME、BACKUP_BASE、BACKUP_KEY 等敏感信息
+│
+├── backups/                       # 【自动备份目录】由 backup_project 工具生成的项目代码 zip 包
+│
+├── downloads/                     # 【视频下载目录】按「月-日」分类，文件名用生成 mp4 时的时间戳
+│                                  # 结构：downloads/09-12/233957.mp4
+│
+└── bot_utils/                     # 【工具函数包】
+    ├── wj.py                      # 文件操作：读/写/删/改/插行，自动备份，路径安全处理
+    │                              # backup_project：依据 backup_manifest 动态打包项目，自动过滤黑名单与去重
+    ├── backup_manifest.py         # 备份清单管理：读 XMKJ.txt → 调 AI（tool 策略）解析 → 写 backup_manifest.json
+    │                              # 提供 is_manifest_stale()（mtime 比对）、refresh_manifest()、load_manifest()
+    │                              # 硬排除黑名单 BLACKLIST = ['backups', 'downloads']
+    ├── xt.py                      # 系统操作：查看 CPU/内存/磁盘，执行 shell 命令（带超时），ping 检测
+    ├── admin_gh.py                # 管理员管理：增删查（仅主管理员可操作）
+    ├── downloader.py              # 视频下载：自动识别 m3u8 是否加密，支持 yt-dlp/FFmpeg 及加密流解密合并
+    ├── script_runner.py           # 脚本执行：运行 AI 生成的 Bash 脚本（带换行修复和超时控制）
+    ├── local_parser.py            # 日志/配置文件解析：统计错误行数、grep 匹配、提取 key=value
+    ├── checkin.py                 # 签到：执行 /home/wxh/checkin.sh，解析日志，记录状态，私聊通知
+    ├── video_crawler.py           # 新站点视频爬取：调 fetch_by_id.js，ffmpeg 转 mp4，按日期分类存放
+    ├── scores.py                  # 权重系统：分数读写、指数衰减（半衰期 15 天）、白名单加分
+    ├── task_queue.py              # 任务队列：全角星号拆分、AI 映射工具、分数排序、串行执行
+    ├── episodic.py                # 情景记忆：落盘检查（每 15 轮）、按关键词检索、跨天清理
+    │
+    └── tool_schema_builder/       # 【OpenAI Schema 构建子包】独立工具包，可单独复用
+        ├── __init__.py            # 导出所有核心类
+        ├── traits/                # 协议定义
+        │   ├── __init__.py
+        │   └── to_schema_able.py  # 定义 ToSchemaAble 协议（所有 Schema 需实现 to_schema 方法）
+        ├── core/                  # 核心构建器
+        │   ├── __init__.py
+        │   └── tool_schema_builder.py  # 链式构建器：设置参数 → 构建对象 → 生成完整 Schema
+        └── models/                # Schema 模型（符合 JSON Schema 标准）
+            ├── __init__.py        # 统一导出所有模型类
+            └── schemas/           # 各类具体 Schema
+                ├── base_schema.py          # 基类：提供 to_schema 和 description 字段
+                ├── base_multiple_schema.py # 组合基类（anyOf/oneOf/allOf 共用）
+                ├── string_schema.py        # string 类型（支持 enum, minLength, maxLength）
+                ├── integer_schema.py       # integer 类型（支持范围、倍数、枚举）
+                ├── number_schema.py        # number 类型（支持范围、倍数、枚举）
+                ├── boolean_schema.py       # boolean 类型
+                ├── null_schema.py          # null 类型
+                ├── object_schema.py        # object 类型（含 properties 和 required）
+                ├── array_schema.py         # array 类型（含 items, minItems, maxItems）
+                ├── function_schema.py      # function 定义（用于 tool 的 function 字段）
+                ├── tool_schema.py          # tool 顶层结构（包含 function）
+                ├── all_of_schema.py        # allOf 组合
+                ├── any_of_schema.py        # anyOf 组合
+                └── one_of_schema.py        # oneOf 组合
+
+
+【外部关联组件】（不在项目根目录，但集成使用）
+
+~/.pi/agent/
+├── models.json                  # Pi 模型配置文件：定义 provider、API 地址、密钥、模型参数
+└── extensions/
+    └── echo-tools.ts            # Pi 扩展：注册 read_file / write_file / execute_shell / system_status
+                                 # 通过 Socket 调用 tool_server.py 执行工具，返回结果给 Pi
+
+
+【核心方向说明】
+- 当前项目核心端为 QQ 端（dz.py），权重最高，所有新功能优先在 QQ 端落地。
+- Web 端（web_server.py + web_ui.html）当前暂时废弃，不参与核心运行。
+- 未来走向以 QQ 端为主，Web 端是否恢复取决于后续需求评估。
+- 后端支持双模式共存：API 模式（默认，使用中转站多模型）和 Pi 模式（通过本地 Pi 子进程执行命令、操作文件）。
+- 模式切换通过私聊指令 @切换到pi / @切换到api 完成，Pi 后端按需启动，不占用常驻资源。
+- Pi 模式已验证可执行本地 shell 命令、创建和修改文件、运行脚本，并具备流式滑窗超时机制以适应大数据量输出。
+- 权重系统：按工具记录成功经验分，半衰期 15 天指数衰减，仅白名单工具参与加分。
+- 任务队列：用户通过全角星号 ＊ 分隔多任务，AI 映射工具名并按分数排序，串行执行。
+- 情景记忆：当天所有对话（含工具调用与结果）一字不差落盘，每 15 轮触发一次，跨天启动自动清理。
+- 语义意图判断：每条消息先由 deepseek-flash 判断「tool / chat」，工具走 deepseek，闲聊走 glm。
+- 思考链：模型返回 reasoning_content 时打印到控制台，便于诊断 AI 决策过程。
+- 工具日志：每次工具执行输出「工具名 | 耗时 | 状态」到控制台。
+- 视频爬取：现有站点走语义解析（AI 判断），新站点走硬指令「爬取 <url>」（独立 Node 脚本链）。
+- 备份项目：硬指令「@备份项目」直接调 backup_project（跳过意图判断）；自然语言走 AI 语义映射
+            # backup_project 依据 XMKJ.txt（AI 解析）+ mtime 缓存，动态确定打包范围，不再硬编码文件清单
+```
+<!-- AUTO-STRUCTURE-END -->
+
 ## 许可证
 
 GPL 2.0

@@ -26,3 +26,4 @@ backups/
 *.swp
 *.swo
 models.json
+open_source.py

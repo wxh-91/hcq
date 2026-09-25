@@ -14,12 +14,53 @@ def _safe_path(filepath: str) -> str:
     return os.path.realpath(filepath)
 
 async def backup_project():
+    from bot_utils.backup_manifest import (
+        is_manifest_stale, refresh_manifest, load_manifest, BLACKLIST
+    )
+
+    # ===== 1. 缓存失效检测与刷新（失败直接报错，Q6=A） =====
+    try:
+        if is_manifest_stale():
+            logger.info("[backup_project] XMKJ.txt 已变更，重新解析清单")
+            await refresh_manifest()
+        items = load_manifest()
+    except Exception as e:
+        logger.error(f"[backup_project] 解析 XMKJ.txt 失败: {e}", exc_info=True)
+        return f"备份失败：解析 XMKJ.txt 出错 - {str(e)}"
+
+    # ===== 2. 提取路径并过滤黑名单 =====
+    paths = []
+    for it in items:
+        p = str(it.get('path', '')).strip().strip('/')
+        if not p:
+            continue
+        top = p.split('/')[0]
+        if top in BLACKLIST:
+            logger.debug(f"[backup_project] 跳过黑名单项: {p}")
+            continue
+        paths.append(p)
+
+    # ===== 3. 去重：父目录已包含则跳过子路径（Q2=C 代码侧兜底） =====
+    paths = sorted(set(paths), key=lambda x: x.count('/'))
+    final_paths = []
+    for p in paths:
+        if any(p == fp or p.startswith(fp + '/') for fp in final_paths):
+            continue
+        final_paths.append(p)
+
+    if not final_paths:
+        return "备份失败：清单为空（XMKJ.txt 解析结果中无可备份项）"
+
+    # ===== 4. 打包 =====
     backup_dir = os.path.join(PROJECT_ROOT, 'backups')
     os.makedirs(backup_dir, exist_ok=True)
     t = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     filename = f'{backup_dir}/bot_backup_{t}.zip'
-    # 切换到项目根目录并打包，生成到 backup_dir
-    cmd = f'cd {PROJECT_ROOT} && zip -r {filename} dz.py admin.py memory.py cl.py memory.json start_bot.sh watchdog.py bot_utils'
+
+    quoted = ' '.join(f"'{p}'" for p in final_paths)
+    cmd = f'cd {PROJECT_ROOT} && zip -r {filename} {quoted}'
+    logger.info(f"[backup_project] 执行打包，共 {len(final_paths)} 项")
+
     proc = await asyncio.create_subprocess_shell(
         cmd,
         stdout=asyncio.subprocess.PIPE,
