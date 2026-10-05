@@ -27,3 +27,5 @@ backups/
 *.swo
 models.json
 open_source.py
+backup_manifest.json
+backup_manifest.meta.json

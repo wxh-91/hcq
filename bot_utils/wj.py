@@ -2,6 +2,8 @@ import os
 import asyncio
 import aiofiles
 import subprocess, datetime, shutil
+import logging
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.expanduser('~/robot')  # 使用波浪号表示用户主目录下的 robot 文件夹
 

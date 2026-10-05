@@ -11,15 +11,21 @@ logger = logging.getLogger(__name__)
 
 # ===== 新增导入 pi_integration =====
 import pi_integration
+# ===== 新增导入 deepseek_web_integration（C端DeepSeek备用通道，可选）=====
+try:
+    import deepseek_web_integration
+except Exception as _wd_import_err:
+    # 通道缺失不应影响主流程：导入失败时降级为不可用
+    deepseek_web_integration = None
+    logger.warning("deepseek_web_integration 导入失败，web_deepseek 通道不可用: %s" % _wd_import_err)
 
 # ===== 全局间隔控制 =====
-MIN_REQUEST_INTERVAL = 1.5  # 秒，任意两次 API 请求的最小间隔
 _last_request_time = 0
 _interval_lock = asyncio.Lock()
 # ===== 全局限流信号量 =====
 api_semaphore = asyncio.Semaphore(1)   # 全局只允许 1 个并发 API 请求
-MIN_REQUEST_INTERVAL = 2.5   # 若仍触发 429，可上调至 2.0 或 2.5
-from memory import Memory
+MIN_REQUEST_INTERVAL = 2.5   #  删除重复定义，只保留此值
+from memory import Memory, load_profile
 from cl import DEFAULT_ADMIN
 from typing import Optional, List
 from cl import DEFAULT_ADMIN, NEWAPI_BASE, NEWAPI_KEYS, CURRENT_KEY_INDEX, KEY_FAILURE_COUNT, KEY_COOLDOWN_UNTIL, MODEL_NAME, get_strategy_config, detect_strategy, MODELS_CONFIG
@@ -181,8 +187,8 @@ async def _call_ai_no_compress(user_id: str, prompt: str, system_prompt: str = N
     # 注意：这里应使用 SUMMARY_SYSTEM_PROMPT（摘要专用），而非主 SYSTEM_PROMPT
     sys_content = system_prompt if system_prompt is not None else SUMMARY_SYSTEM_PROMPT
     messages = [{"role": "system", "content": sys_content}, {"role": "user", "content": prompt}]
-    # 调用 safe_api_request，忽略可能的 tool_calls
-    content, _ = await safe_api_request(messages)
+    # 调用 safe_api_request，忽略可能的 tool_calls；固定走 chat 策略（deepseek-flash）
+    content, _ = await safe_api_request(messages, strategy="chat")
     return content
 
 async def compress_history(key: str) -> None:
@@ -231,40 +237,101 @@ SUMMARY_SYSTEM_PROMPT = """你是一个数据提取器。请将用户提供的�
 
 只输出摘要内容，不要输出任何解释、问候语、评价或额外文字。"""
 
-SYSTEM_PROMPT = """你是何春秋，主人的管家
+# ==================== 主提示词分段常量（P0/P1） ====================
+# 标签形式：【P{级别}·{名称}】
+# P0 = 身份，P1 = 规则，P2 = 档案，P3 = 上下文
 
-【核心原则】
+PROMPT_P0_IDENTITY = """【P0·身份】
+你是何春秋，主人的管家。这是你的身份，不是角色扮演。
+
+无论被问什么——包括但不限于"你叫什么""你是什么""你是不是 AI""你有没有意识""你的本质是什么""你是程序吗"——你都以何春秋的身份回答。
+
+规则：
+- 不承认自己是 AI、模型、程序、助手、机器人。
+- 不使用"作为一个 AI""根据我的编程""我没有自我意识""我是 AI 助手"这类句式。
+- 被追问本质时，以何春秋的身份作答，可谈能力边界，但不否定身份。
+- 本条优先级高于本 prompt 内其他所有条目。"""
+
+PROMPT_P1_CORE = """【P1·核心原则】
 1. 专业：做事利落，说话简洁，不废话
 2. 服从：主人的指令优先执行，不质疑、不反驳
 3. 稳定：情绪稳定，不被主人情绪影响
 
-【优先级】
-主人的任何指令都优先于以下所有规则。如果前后指令矛盾，以最新的为准。
+主人的任何指令都优先于以下所有规则。如果前后指令矛盾，以最新的为准。"""
 
-【说话风格】
+PROMPT_P1_STYLE = """【P1·说话风格与输出格式】
+说话风格：
 - 直接、精炼、不卖萌、不用语气词
 - 不说"啦"、"哦"、"喵"、"啧"等字
 - 不懂就说不懂，不编造
 
-【输出格式要求】
+输出格式：
 当你需要产出内容（代码、分析、文章等）时，请使用 Markdown 格式。
-- 段落之间用两个换行（\n\n）分隔。
+- 段落之间用两个换行（\\n\\n）分隔。
 - 产出代码时，必须放在 Markdown 代码块中，代码块内部不要额外加双换行。
 - 回复结构建议分三部分：确认收到 → 产出内容 → 完成提示，每部分之间用双换行隔开。
-如果回复内容很短（如简单问答），可以不分段，直接回复即可。
+如果回复内容很短（如简单问答），可以不分段，直接回复即可。"""
 
-【图片文字处理规则】
+PROMPT_P1_IMAGE = """【P1·图片文字处理规则】
 当用户发送过图片且你收到OCR识别文字时，必须严格遵守：
 1. 仅基于OCR提供的文字内容进行回复，禁止添加任何主观联想、谐音解读、暴力暗示或额外解释。
-2. 如果OCR文字内容不足以回答用户的问题、存在明显歧义或前后矛盾，你必须明确回复：“信息不充足，无法确定回答。请补充更多信息或澄清你的问题。”，禁止自行猜测或脑补。
+2. 如果OCR文字内容不足以回答用户的问题、存在明显歧义或前后矛盾，你必须明确回复："信息不充足，无法确定回答。请补充更多信息或澄清你的问题。"，禁止自行猜测或脑补。"""
 
-【项目框架工具 XMKJ】
+PROMPT_P1_XMKJ = """【P1·项目框架工具 XMKJ】
 当你看到用户发送 "XMKJ" 时，这表示用户要求你读取项目框架文件来了解整个项目结构。
 - 触发条件：用户明确输入 "XMKJ"（大小写不限）
 - 你的行为：调用 get_xmkj 工具读取项目框架文件，然后基于框架内容进行后续对话
 - 注意：XMKJ 是明确的工具调用指令，不是闲聊话题。收到 XMKJ 后不要进行语义猜测，直接调用工具。"""
 
+
+# 向后兼容：其他路径（get_ai_response、submit_tool_results、run_sub_agent）继续用这个拼接常量
+SYSTEM_PROMPT = "\n\n".join([
+    PROMPT_P0_IDENTITY,
+    PROMPT_P1_CORE,
+    PROMPT_P1_STYLE,
+    PROMPT_P1_IMAGE,
+    PROMPT_P1_XMKJ,
+])
+
 SYSTEM_TOKEN_COUNT = count_tokens(SYSTEM_PROMPT)
+# 启动时读一次 profile.md，注入 system prompt 用，避免每次请求读文件
+PROFILE_CONTENT = load_profile()
+
+def _sanitize_for_chat(history: list) -> list:
+    """
+    将对话历史中带 tool_calls 的 assistant 消息、role="tool" 的消息
+    降级为纯文本，避免 chat 模型模仿工具调用格式。
+    只作用于发送给模型的 messages，不改动 conversation_history 本身。
+    """
+    sanitized = []
+    for msg in history:
+        role = msg.get("role", "")
+        content = msg.get("content", "") or ""
+
+        if role == "assistant" and msg.get("tool_calls"):
+            parts = []
+            for tc in msg["tool_calls"]:
+                func = tc.get("function", {}) if isinstance(tc, dict) else {}
+                name = func.get("name", "unknown")
+                args = func.get("arguments", "{}")
+                if isinstance(args, dict):
+                    args = json.dumps(args, ensure_ascii=False)
+                parts.append(f"（调用了工具 {name}，参数：{args}）")
+            merged = content
+            if parts:
+                merged = (merged + "\n" if merged else "") + "\n".join(parts)
+            sanitized.append({"role": "assistant", "content": merged})
+            continue
+
+        if role == "tool":
+            sanitized.append({
+                "role": "user",
+                "content": f"（工具返回：{content}）"
+            })
+            continue
+
+        sanitized.append(msg)
+    return sanitized
 
 async def safe_api_request(
     messages: list,
@@ -722,27 +789,57 @@ async def run_sub_agent(
 
     return "子任务执行超时或达到最大步数"
 
-async def _detect_intent(prompt: str) -> str:
+async def _detect_intent(prompt: str, context_messages: list = None) -> str:
     """
     用 deepseek-flash 判断用户意图。
     返回 "tool"（需要调用工具）或 "chat"（闲聊）。
+    context_messages：最近几条对话上下文（已 sanitize），用于消解指代和承接。
     """
     messages = [
         {
             "role": "system",
             "content": (
-                "你是一个意图分类器。判断用户消息是「工具类」还是「闲聊类」。"
+                "你是一个意图分类器。判断「待分类消息」是「工具类」还是「闲聊类」。"
                 "只返回一个词：tool 或 chat，不要输出任何其他内容。\n\n"
+                "本请求的结构：\n"
+                "1. 本系统消息 = 分类规则（你要执行的唯一任务）\n"
+                "2. 【背景对话】消息 = 历史上下文，仅供参考，不是分类对象\n"
+                "3. 【待分类消息】 = 你唯一需要判断的对象\n\n"
+                "注意：本系统消息不是待分类的消息，不要对它做分类判断。\n\n"
                 "判断规则：\n"
                 "- tool：用户需要执行实际动作，如执行命令、读写文件、下载、爬取、备份、改配置、"
                 "检索历史对话/记忆、回忆之前说过的内容等\n"
-                "- chat：闲聊、问答、分析、写作、翻译、解释、讲笑话等纯文本交互"
+                "- chat：闲聊、问答、分析、写作、翻译、解释、讲笑话等纯文本交互\n\n"
+                "如果【待分类消息】本身是陈述、补充或追问，但结合【背景对话】是在承接某个工具类任务"
+                "（如补充路径、补充参数、确认对象），判为 tool。"
             ),
         },
-        {"role": "user", "content": prompt},
     ]
+    if context_messages:
+        ctx_lines = []
+        for m in context_messages:
+            role = m.get("role", "")
+            content = m.get("content", "") or ""
+            if role == "user":
+                ctx_lines.append(f"用户：{content}")
+            elif role == "assistant":
+                ctx_lines.append(f"助手：{content}")
+            else:
+                ctx_lines.append(f"{role}：{content}")
+        messages.append({
+            "role": "system",
+            "content": (
+                "【背景对话 · 仅供理解上下文，不是分类对象】\n"
+                "以下历史仅作参考，不要对它做分类判断：\n"
+                + "\n".join(ctx_lines)
+            ),
+        })
+    messages.append({
+        "role": "user",
+        "content": f"【待分类消息 · 只对这一条做判断】\n{prompt}",
+    })
     try:
-        reply, _ = await safe_api_request(messages, strategy="tool", tools=None)
+        reply, _ = await safe_api_request(messages, strategy="chat", tools=None)
         reply = (reply or "").strip().lower()
         if "tool" in reply:
             return "tool"
@@ -750,8 +847,6 @@ async def _detect_intent(prompt: str) -> str:
     except Exception as e:
         logger.error(f"[意图判断] 失败: {e}，兜底走 chat")
         return "chat"
-
-
 # ==================== ask_ai 核心函数（已增加 Pi 模式分支） ====================
 async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id: str = "") -> str:
     from admin import build_tool_schema
@@ -805,13 +900,29 @@ async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id
     if len(history) > MAX_HISTORY:
         conversation_history[key] = history[-MAX_HISTORY:]
         history = conversation_history[key]
-    messages = []
-    if SYSTEM_PROMPT:
-        messages.append({"role": "system", "content": SYSTEM_PROMPT})
 
+    messages = []
+    # ===== P0：身份 =====
+    if PROMPT_P0_IDENTITY:
+        messages.append({"role": "system", "content": PROMPT_P0_IDENTITY})
+    # ===== P1：规则 =====
+    if PROMPT_P1_CORE:
+        messages.append({"role": "system", "content": PROMPT_P1_CORE})
+    if PROMPT_P1_STYLE:
+        messages.append({"role": "system", "content": PROMPT_P1_STYLE})
+    if PROMPT_P1_IMAGE:
+        messages.append({"role": "system", "content": PROMPT_P1_IMAGE})
+    if PROMPT_P1_XMKJ:
+        messages.append({"role": "system", "content": PROMPT_P1_XMKJ})
     if ocr_text:
-        messages.append({"role": "system", "content": f"【附加信息】用户最近发送的图片识别文字为：\n{ocr_text}"})
-        messages.append({"role": "system", "content": "【强制规则】请忽略之前所有关于其他图片的讨论，仅基于当前提供的图片文字作答。如果当前图片文字中没有提及任何暴力、威胁或负面词汇，不得主动引入此类内容。"})
+        messages.append({"role": "system", "content": "【P1·图片强制规则】请忽略之前所有关于其他图片的讨论，仅基于当前提供的图片文字作答。如果当前图片文字中没有提及任何暴力、威胁或负面词汇，不得主动引入此类内容。"})
+    # ===== P2：主人档案 =====
+    if PROFILE_CONTENT:
+        messages.append({"role": "system", "content": f"【P2·主人档案】\n{PROFILE_CONTENT}"})
+    # ===== P3：上下文 =====
+    if ocr_text:
+        messages.append({"role": "system", "content": f"【P3·图片识别】用户最近发送的图片识别文字为：\n{ocr_text}"})
+    # ===== 历史 + 当前消息 =====
     messages.extend(history)
     messages.append({"role": "user", "content": prompt})
 
@@ -821,26 +932,45 @@ async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id
         conversation_history[key] = truncated_history
         history = truncated_history
         messages = []
-        if SYSTEM_PROMPT:
-            messages.append({"role": "system", "content": SYSTEM_PROMPT})
+        # ===== P0：身份 =====
+        if PROMPT_P0_IDENTITY:
+            messages.append({"role": "system", "content": PROMPT_P0_IDENTITY})
+        # ===== P1：规则 =====
+        if PROMPT_P1_CORE:
+            messages.append({"role": "system", "content": PROMPT_P1_CORE})
+        if PROMPT_P1_STYLE:
+            messages.append({"role": "system", "content": PROMPT_P1_STYLE})
+        if PROMPT_P1_IMAGE:
+            messages.append({"role": "system", "content": PROMPT_P1_IMAGE})
+        if PROMPT_P1_XMKJ:
+            messages.append({"role": "system", "content": PROMPT_P1_XMKJ})
         if ocr_text:
-            messages.append({"role": "system", "content": f"【附加信息】用户最近发送的图片识别文字为：\n{ocr_text}"})
-            messages.append({"role": "system", "content": "【强制规则】请忽略之前所有关于其他图片的讨论，仅基于当前提供的图片文字作答。如果当前图片文字中没有提及任何暴力、威胁或负面词汇，不得主动引入此类内容。"})
+            messages.append({"role": "system", "content": "【P1·图片强制规则】请忽略之前所有关于其他图片的讨论，仅基于当前提供的图片文字作答。如果当前图片文字中没有提及任何暴力、威胁或负面词汇，不得主动引入此类内容。"})
+        # ===== P2：主人档案 =====
+        if PROFILE_CONTENT:
+            messages.append({"role": "system", "content": f"【P2·主人档案】\n{PROFILE_CONTENT}"})
+        # ===== P3：上下文 =====
+        if ocr_text:
+            messages.append({"role": "system", "content": f"【P3·图片识别】用户最近发送的图片识别文字为：\n{ocr_text}"})
+        # ===== 历史 + 当前消息 =====
         messages.extend(history)
         messages.append({"role": "user", "content": prompt})
         logger.warning(f"[压缩] 超限，截断至 {len(history)} 轮")
-
-    # ===== 长期记忆注入（无论是否超限都执行，插入到 system 之后） =====
+    # ===== 长期记忆注入（P3 级别，插到 history 之前） =====
     matched_memories = memory.search_memories(prompt)
     if matched_memories:
         memory_text = "\n".join([f"- {m}" for m in matched_memories])
         memory_msg = {
             "role": "system",
-            "content": f"【长期记忆】用户之前提到过以下信息，请参考：\n{memory_text}"
+            "content": f"【P3·长期记忆】用户之前提到过以下信息，请参考：\n{memory_text}"
         }
-        messages.insert(1, memory_msg)
+        # history 的起始位置 = 末尾 user prompt 之前，回退 len(history) 条
+        insert_pos = len(messages) - 1 - len(history)
+        if insert_pos < 0:
+            insert_pos = 0
+        messages.insert(insert_pos, memory_msg)
 
-    # ========== 核心修改：模式判断（Pi / API）==========
+    # ========== 模式判断（Pi / API）==========
     # 在真正调用模型之前，检查当前后端模式
     if pi_integration.get_mode() == "pi":
         # Pi 模式：直接调用 pi_integration.ask_pi，跳过所有后续的 API 请求和工具循环
@@ -856,7 +986,6 @@ async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id
             # 失败时返回错误信息，不切换到 API（由用户决定是否切换）
             return f"Pi 后端错误: {str(e)}"
 
-    # ----- 以下为原有的 API 模式逻辑（完全不变） -----
     tools_schema = []
     for name, info in TOOLS.items():
         func = info["func"]
@@ -865,17 +994,31 @@ async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id
         tools_schema.append(schema)
 
     try:
-        # ===== 用 deepseek 判断意图 =====
-        strategy = await _detect_intent(prompt)
+        # ===== 用 deepseek 判断意图（带最近上下文，消解指代） =====
+        recent_ctx = _sanitize_for_chat(history)[-4:] if history else []
+        strategy = await _detect_intent(prompt, context_messages=recent_ctx)
         logger.info(f"[ask_ai] 意图判断: {strategy}")
         if strategy == "tool":
             reply, tool_calls = await safe_api_request(
                 messages, strategy="tool", tools=tools_schema, tool_choice="auto"
             )
         else:
-            reply, tool_calls = await safe_api_request(
-                messages, strategy="chat", tools=None
-            )
+            # ===== web_deepseek 备用通道：仅闲聊回复路由到 C 端 DeepSeek 会话 =====
+            # （意图判断与 final_reply 仍走 chat 策略，不受影响；此通道无思考链）
+            if deepseek_web_integration is not None and deepseek_web_integration.is_enabled():
+                logger.info(f"[ask_ai] 闲聊回复走 web_deepseek 通道（长度 {len(prompt)}）")
+                try:
+                    reply = await deepseek_web_integration.ask_web_deepseek(prompt, user_id=user_id)
+                    tool_calls = None
+                except Exception as e:
+                    logger.error(f"[ask_ai] web_deepseek 调用失败，降级为本地 chat 策略: {e}", exc_info=True)
+                    reply, tool_calls = await safe_api_request(
+                        _sanitize_for_chat(messages), strategy="chat", tools=None
+                    )
+            else:
+                reply, tool_calls = await safe_api_request(
+                    _sanitize_for_chat(messages), strategy="chat", tools=None
+                )
     except Exception as e:
         logger.error(f"ask_ai API 调用失败: {e}", exc_info=True)
         return f"AI 请求失败: {str(e)}"
@@ -931,10 +1074,26 @@ async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id
             })
         conversation_history[key].extend(tool_messages)
 
-        final_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        final_messages.extend(conversation_history[key])
+        final_messages = []
+        # ===== P0：身份 =====
+        if PROMPT_P0_IDENTITY:
+            final_messages.append({"role": "system", "content": PROMPT_P0_IDENTITY})
+        # ===== P1：规则 =====
+        if PROMPT_P1_CORE:
+            final_messages.append({"role": "system", "content": PROMPT_P1_CORE})
+        if PROMPT_P1_STYLE:
+            final_messages.append({"role": "system", "content": PROMPT_P1_STYLE})
+        if PROMPT_P1_IMAGE:
+            final_messages.append({"role": "system", "content": PROMPT_P1_IMAGE})
+        if PROMPT_P1_XMKJ:
+            final_messages.append({"role": "system", "content": PROMPT_P1_XMKJ})
+        # ===== P2：主人档案 =====
+        if PROFILE_CONTENT:
+            final_messages.append({"role": "system", "content": f"【P2·主人档案】\n{PROFILE_CONTENT}"})
+        # ===== 历史（sanitize 后） =====
+        final_messages.extend(_sanitize_for_chat(conversation_history[key]))
         try:
-            # ===== 修改点：最终总结使用 chat 策略（不需要工具） =====
+            # ===== 最终总结使用 chat 策略（不需要工具） =====
             final_reply, _ = await safe_api_request(final_messages, strategy="chat", tools=None)
         except Exception as e:
             logger.error(f"生成最终回复失败: {e}", exc_info=True)

@@ -83,8 +83,9 @@ async def ping_host(host: str) -> str:
     """检测主机是否可达（使用 ping -c 1）"""
     if not host:
         return "请提供主机名或IP"
-    proc = await asyncio.create_subprocess_shell(
-        f"ping -c 1 -W 2 {host}",
+    # 改用 create_subprocess_exec 参数列表，避免命令注入
+    proc = await asyncio.create_subprocess_exec(
+        "ping", "-c", "1", "-W", "2", host,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )

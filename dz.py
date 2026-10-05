@@ -295,8 +295,27 @@ async def _handle_msg_locked(bot: Bot, event: MessageEvent):
 
     # ---------- 私聊逻辑 ----------
     if chat_type == "private":
+        # [large-task] 大型任务拦截（#大型 开头，仅在私聊触发）
+        if user_input.startswith("#大型"):
+            from bot_utils.large_task import run_large_task
+
+            async def _notify(msg: str):
+                try:
+                    await bot.send_private_msg(user_id=int(event.user_id), message=msg)
+                except Exception as e:
+                    logger.error(f"[large-task] 通知发送失败: {e}")
+
+            asyncio.create_task(
+                run_large_task(
+                    user_input=user_input,
+                    user_id=str(event.user_id),
+                    notify=_notify,
+                )
+            )
+            return
+
         # === 优先级最高：模式切换指令（@切换到api / @切换到pi） ===
-        # 注意：必须保留 @ 前缀，因为用户习惯用 @ 触发
+            # 没有 pending 时继续正常流程（避免误伤普通对话）
         if user_input.startswith("@") and user_input[1:].strip().startswith("切换到"):
             # 提取目标模式
             raw = user_input[1:].strip()
@@ -317,6 +336,47 @@ async def _handle_msg_locked(bot: Bot, event: MessageEvent):
 
         # ---------- 爬取指令（新站点，异步） ----------
         if user_input.startswith("爬取"):
+            # 多任务爬取：含全角星号，按 ＊ 拆分，后台串行爬取
+            if "＊" in user_input:
+                from cl import DEFAULT_ADMIN
+                parts = [p.strip() for p in user_input.split("＊") if p.strip()]
+                urls = []
+                for p in parts:
+                    if p.startswith("爬取"):
+                        u = p[2:].strip()
+                        if u:
+                            urls.append(u)
+                if not urls:
+                    await send_segmented_reply(bot, event, "未解析到有效的爬取 URL")
+                    return
+                try:
+                    admin_id = int(DEFAULT_ADMIN)
+                except (ValueError, TypeError):
+                    logger.error("[爬取] 无法解析管理员ID")
+                    return
+                await send_segmented_reply(bot, event, f"收到，正在后台串行下载 {len(urls)} 个视频...")
+
+                async def _background_multi_crawl(urls_list, admin):
+                    from bot_utils.video_crawler import crawl_video
+                    total = len(urls_list)
+                    for idx, u in enumerate(urls_list, 1):
+                        try:
+                            result = await crawl_video(u)
+                            if result["success"]:
+                                msg = f"[{idx}/{total}] 爬取完成\n保存路径：{result['mp4_path']}"
+                            else:
+                                msg = f"[{idx}/{total}] 爬取失败：{result['error']}"
+                        except Exception as e:
+                            logger.error(f"[爬取] 第 {idx} 个任务异常: {e}", exc_info=True)
+                            msg = f"[{idx}/{total}] 爬取异常：{str(e)}"
+                        try:
+                            await bot.send_private_msg(user_id=admin, message=msg)
+                        except Exception as e:
+                            logger.error(f"[爬取] 通知发送失败: {e}", exc_info=True)
+
+                asyncio.create_task(_background_multi_crawl(urls, admin_id))
+                return
+            # 单任务爬取：原逻辑
             url = user_input[2:].strip()
             if not url:
                 await send_segmented_reply(bot, event, "请提供视频 URL，格式：爬取 <url>")
@@ -348,6 +408,14 @@ async def _handle_msg_locked(bot: Bot, event: MessageEvent):
             asyncio.create_task(
                 TaskQueue().submit(user_input, str(event.user_id), chat_type, group_id)
             )
+            return
+
+        # ---------- 转MP3 硬指令 ----------
+        if user_input == "转MP3" or user_input.startswith("转MP3"):
+            from bot_utils.media import convert_latest_mp4_to_mp3
+            await send_segmented_reply(bot, event, "收到，正在转码...")
+            result = await convert_latest_mp4_to_mp3()
+            await send_segmented_reply(bot, event, result)
             return
 
         # 其他 @ 开头的硬指令（FAST_COMMANDS）

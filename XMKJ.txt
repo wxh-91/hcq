@@ -3,29 +3,55 @@
 ├── dz.py                          # 【QQ端主入口】NoneBot 消息分发器，处理 QQ 私聊/群聊消息、图片、文件
 │                                  # 群聊非管理员返回无权限提示；文件下载异常分层捕获并返回用户友好信息
 │                                  # 支持 @切换到pi / @切换到api 指令，在 API 和 Pi 后端间实时切换
-│                                  # 支持「爬取 <url>」硬指令，触发新站点视频下载
-│                                  # 支持全角星号 ＊ 分隔多任务，进入任务队列串行执行
+│                                  # 私聊拦截 #大型 开头的消息，异步转入 large_task 五阶段流程，不阻塞消息锁
+│                                  # 支持「爬取 <url>」硬指令，单任务异步触发新站点视频下载
+│                                  # 「爬取」多任务（含 ＊）走后台串行循环，逐 URL 通知管理员，不阻塞消息锁
+│                                  # 全角星号 ＊ 分隔多任务（非爬取），进入任务队列串行执行
 │                                  # 启动时清理过期情景记忆，Bot 连接后执行签到检查
 │
 ├── admin.py                       # 【工具注册与路由】所有 AI 可调用工具的注册表，以及工具执行入口
 │                                  # 工具参数自动类型转换（str→int/bool）；异常分层捕获（TypeError/ValueError/TimeoutError）
 │                                  # 所有异常记录完整堆栈日志；工具成功执行后触发加分（白名单）
 │                                  # 每次工具执行输出「工具名 | 耗时 | 状态」日志
+│                                  # 执行入口 execute_tool_directly 接入 security.py 的权限检查与审计日志
+│                                  # 危险工具仅主管理员可执行，无二次确认机制
 │                                  # 注册工具：checkin、query_knowledge、get_xmkj、agent_manager、read_file、
 │                                  # write_file、replace_line、delete_line、insert_line、ping_host、
 │                                  # backup_project、execute_shell、system_status、list_admin、add_admin、
 │                                  # del_admin、set_group_chat_enabled、get_group_chat_status、download_m3u8、
-│                                  # run_bash_script、recall_conversation
+│                                  # run_bash_script、recall_conversation、clean_media
 │                                  # 快速硬指令：备份项目、系统状态、管理员列表
 │
 ├── ai.py                          # 【AI 核心引擎】对话管理、历史压缩、多 API Key 轮询、TodoList 规划器、子代理
 │                                  # tool_calls 标准流程（AI初始回复→执行工具→提交结果→AI最终总结）
-│                                  # 语义意图判断：deepseek-flash 判断「tool / chat」，工具走 deepseek，闲聊走 glm
-│                                  # 思考链打印：模型返回 reasoning_content 时输出到控制台
-│                                  # SYSTEM_PROMPT 含 XMKJ 规则、图片处理规则、输出格式规则
-│                                  # 加载 profile.md，注入身份与偏好到 system prompt
+│                                  # 语义意图判断：走 chat 策略，判断「tool / chat」，带最近 4 条上下文（已 sanitize）
+│                                  # 决策层（主对话与工具调用）走 tool 策略（deepseek-flash）
+│                                  # 执行层（final_reply、任务映射排序）走 chat 策略（deepseek-v4-flash-0731）
+│                                  # 闲聊默认走 chat 策略；web_deepseek 策略启用时经 ask_ai 路由到 C 端 DeepSeek 网页版会话备用通道
+│                                  # 意图判断按「分类规则 / 背景对话 / 待分类消息」三段标记隔离
+│                                  # 思考链打印：模型返回 reasoning_content 时输出到控制台，格式 [思考链][策略名]
+│                                  # 提示词分级：P0 身份 / P1 规则 / P2 档案 / P3 上下文，分段常量独立定义
+│                                  # 分段常量：PROMPT_P0_IDENTITY、PROMPT_P1_CORE、PROMPT_P1_STYLE、
+│                                  # PROMPT_P1_IMAGE、PROMPT_P1_XMKJ；SYSTEM_PROMPT 为五段拼接的向后兼容常量
+│                                  # 标签统一为【P级别·名称】，主请求内 system 消息按级别顺序注入
+│                                  # 启动时加载 profile.md（PROFILE_CONTENT），注入为【P2·主人档案】
+│                                  # 长期记忆注入到 P3 位置（history 之前），标签【P3·长期记忆】
+│                                  # _sanitize_for_chat()：降级 tool_calls 与 role=tool 为纯文本，防 chat 模型模仿
+│                                  # 摘要生成（_call_ai_no_compress）固定走 chat 策略
 │                                  # 非工具路径保存对话历史，触发情景记忆落盘检查
 │                                  # 集成 pi_integration，根据当前模式选择调用 API 或 Pi 后端
+│                                  # 顶部 try/except 导入 deepseek_web_integration，导入失败仅告警，不影响启动
+│                                  # 意图判断（_detect_intent）与 final_reply 固定走 chat 策略，不路由到 C 端
+│
+├── deepseek_web_integration.py   # 【C 端 DeepSeek 会话接入封装层】管理 deepseek-mcp-server（Node 社区逆向包）子进程生命周期
+│                                  # 认证用 DEEPSEEK_USER_TOKEN（chat.deepseek.com 网页版会话，免费）；走 stdio 协议与官方 mcp SDK 通信
+│                                  # 长驻 worker + 请求队列架构：MCP 客户端 enter / 调用 / exit 全部在单一 worker task 内完成，
+│                                  # 外部 ask_web_deepseek() 投递请求并 await Future，避免 anyio cancel scope 跨 task 报错
+│                                  # 调用失败（非超时）自动重建 session 重试一次，超时重建不重试；worker 崩溃自愈
+│                                  # 按用户维护 session_key 续接多轮上下文（服务端内存态缓存，30 分钟 TTL，子进程重启失效）
+│                                  # 结构化日志写 web_deepseek.log（call / init / restart，每行一条 JSON）
+│                                  # 提供 is_enabled()、ask_web_deepseek()、close()；此通道不提供思考链
+│                                  # 依赖 models.json 中 web_deepseek 策略的 enabled 开关（默认关闭）
 │
 ├── pi_integration.py              # 【Pi 后端封装层】管理 Pi 进程生命周期、模式切换、工具注册与调用
 │                                  # 提供 init_pi_backend()、close_pi_backend()、ask_pi()、set_mode()、get_mode()
@@ -33,17 +59,25 @@
 │                                  # 流式滑窗超时机制，处理大数据量输出，防止管道堵塞
 │
 ├── memory.py                      # 【持久化存储】基于 JSON 的内存管理，保存管理员列表、群聊开关、长期记忆
-│                                  # 提供 load_profile() 读取 profile.md
+│                                  # 提供 load_profile() 读取同目录 profile.md，文件缺失或读取失败返回空串
 │                                  # save 函数含写入异常处理和临时文件清理；KnowledgeDB 类管理 SQLite 知识库
+│                                  # 长期记忆采用 MemoryRecord 生命周期模型：创建→休眠→唤醒→再强化→衰减→遗忘→清除
+│                                  # 指数衰减半衰期 30 天；命中时 confidence +0.2、access_count +1、状态恢复 active
+│                                  # 兼容旧格式：纯字符串自动迁移为 MemoryRecord 字典
 │
 ├── cl.py                          # 【配置加载】读取 .env 环境变量，加载 API Key 列表、基础 URL、默认管理员
 │                                  # 含 MODEL_NAME、BACKUP_BASE、BACKUP_KEY；提供 load_models_config()、
 │                                  # get_strategy_config()、detect_strategy() 函数
 │
-├── models.json                    # 【多模型策略配置】定义 chat/tool/fallback 三种策略的模型、地址、密钥、超时、重试
-│                                  # chat 策略：glm-4-flash（日常闲聊）
-│                                  # tool 策略：deepseek-flash（推理与工具调用）
-│                                  # fallback 策略：备用模型
+├── models.json                    # 【多模型策略配置】定义 7 种策略的模型、地址、密钥
+│                                  # chat 策略：deepseek-v4-flash-0731（A6api，执行层，含思考链）
+│                                  # tool 策略：deepseek-flash（旧站，日常工具调用）
+│                                  # fallback 策略：DeepSeek-V4-Pro（备用站）
+│                                  # large_planner 策略：deepseek-v4-pro（旧站，大型任务总规划师）
+│                                  # large_executor 策略：deepseek-v4-flash-0731（A6api，大型任务执行员）
+│                                  # large_summarizer 策略：qwen/qwen3.6-35b-a3b（matrix，大型任务纯文本总结员）
+│                                  # web_deepseek 策略：C 端 DeepSeek 网页版会话备用通道（enabled 默认 false，
+│                                  # timeout 120、conversation_memory true；需 DEEPSEEK_USER_TOKEN，不提供思考链）
 │
 ├── tool_server.py                 # 【历史遗留】Socket 服务端，监听 127.0.0.1:9999
 │                                  # 接收 Pi 扩展发来的工具调用请求，调用 execute_tool_directly 执行并返回结果
@@ -88,6 +122,8 @@
 │       └── tool_events/          # 工具事件（ToolExecution、ToolResult、ToolExecutionEnd）
 │
 ├── memory.json                    # 【运行时数据】存储管理员、群聊状态、长期记忆、episodic_state 计数器
+│                                  # 长期记忆以 MemoryRecord 结构化存储
+│                                  # 字段：content、created_at、last_accessed_at、access_count、confidence、status
 │
 ├── scores.json                    # 【工具分数】记录每个白名单工具的成功次数与最近成功时间
 │                                  # 字段：score、last_success、success_count
@@ -99,6 +135,16 @@
 ├── checkin_state.json             # 【签到状态】记录今日是否已签到、签到时间、获得额度
 │
 ├── knowledge.db                   # 【知识库数据库】SQLite 文件，存储 user_preferences、solution_history、conversation_summary
+│
+├── audit.log                      # 【审计日志】记录每次危险工具的执行意图与结果
+│                                  # 每行 JSON：ts、tool、args、sender_id、status、elapsed、result_preview
+│                                  # status 取值：success / failed / denied
+│
+├── web_deepseek.log               # 【C 端通道结构化日志】C 端 DeepSeek 通道每次调用 / 初始化 / 重启记录一行
+│                                  # 追加模式，每行一条 JSON：ts、event、user、status、elapsed、reason
+│                                  # event 取值 call / init / restart；status 取值 ok / fail
+│                                  # reason 取值 401 / 429 / timeout / empty / init_fail / restart_fail / other
+│                                  # 用于统计成功率、延迟分布与失败原因分布
 │
 ├── .env                           # 【环境变量】存放 NEWAPI_BASE、NEWAPI_KEY、MODEL_NAME、BACKUP_BASE、BACKUP_KEY 等敏感信息
 │
@@ -121,8 +167,21 @@
     ├── checkin.py                 # 签到：执行 /home/wxh/checkin.sh，解析日志，记录状态，私聊通知
     ├── video_crawler.py           # 新站点视频爬取：调 fetch_by_id.js，ffmpeg 转 mp4，按日期分类存放
     ├── scores.py                  # 权重系统：分数读写、指数衰减（半衰期 15 天）、白名单加分
+    ├── media.py                   # 转MP3：通过B站插件下载视频MP4，再通过硬指令"转MP3"转成MP3
+    │                              # 无论成功还是失败都删除原MP4
+    │                              # 通过自然语言调用清理工具："帮我删除所有MP4和MP3"等
     ├── task_queue.py              # 任务队列：全角星号拆分、AI 映射工具、分数排序、串行执行
     ├── episodic.py                # 情景记忆：落盘检查（每 15 轮）、按关键词检索、跨天清理
+    ├── security.py                # 安全约束：权限检查（危险工具仅主管理员）+ 审计日志
+    │                              # 无确认机制；提供 check_permission()、log_audit()
+    ├── large_task.py              # 大型任务五阶段处理器
+    │                              # 阶段1 规划（large_planner）：输出 JSON 子任务列表
+    │                              # 阶段2 执行（large_executor）：逐个子任务执行，工具调用写死
+    │                              # 阶段3 失败处理：依赖链断则中断，独立失败则跳过
+    │                              # 阶段4 总结（large_summarizer）：生成人话汇报
+    │                              # 阶段5 清理：删除内存上下文
+    │                              # 128k 上下文只存内存；同一 user_id 同时只允许一个大型任务
+    │                              # 通过 notify 回调向外发消息，不直接操作 bot
     │
     └── tool_schema_builder/       # 【OpenAI Schema 构建子包】独立工具包，可单独复用
         ├── __init__.py            # 导出所有核心类
@@ -167,12 +226,33 @@
 - 后端支持双模式共存：API 模式（默认，使用中转站多模型）和 Pi 模式（通过本地 Pi 子进程执行命令、操作文件）。
 - 模式切换通过私聊指令 @切换到pi / @切换到api 完成，Pi 后端按需启动，不占用常驻资源。
 - Pi 模式已验证可执行本地 shell 命令、创建和修改文件、运行脚本，并具备流式滑窗超时机制以适应大数据量输出。
+- C 端 DeepSeek 备用通道（web_deepseek 策略）：闲聊回复路径可选路由到网页版会话（DEEPSEEK_USER_TOKEN，免费，不提供思考链），
+  由 models.json 的 enabled 开关控制，调用失败自动降级 chat 策略；意图判断与 final_reply 不路由到该通道。
+- 多模型分工：
+  chat 策略（A6api deepseek-v4-flash-0731）负责日常闲聊与执行层总结；
+  tool 策略（旧站 deepseek-flash）负责日常工具调用决策；
+  fallback 策略（备用站 DeepSeek-V4-Pro）全挂时兜底；
+  large_planner（旧站 deepseek-v4-pro）为大型任务总规划师；
+  large_executor（A6api deepseek-v4-flash-0731）为大型任务执行员，不做决策；
+  large_summarizer（matrix qwen/qwen3.6-35b-a3b）为大型任务纯文本总结员，不承担关键路径；
+  web_deepseek（C 端 DeepSeek 网页版会话，免费）为闲聊备用通道，仅闲聊回复使用，不承担关键路径。
 - 权重系统：按工具记录成功经验分，半衰期 15 天指数衰减，仅白名单工具参与加分。
 - 任务队列：用户通过全角星号 ＊ 分隔多任务，AI 映射工具名并按分数排序，串行执行。
+- 大型任务：私聊发送 #大型 开头的消息触发，五阶段流程（规划→执行→失败处理→总结→清理）。
+  #大型 必须出现在消息最前面，其他位置无效。群聊不触发。
+  规划师输出 JSON 子任务列表，执行员严格照办，总结员生成最终汇报。
+  全程通过私聊通知进度，每个子任务完成推送一条状态。
+  同一用户同时只允许一个大型任务，执行期间拒绝新的大型任务请求。
 - 情景记忆：当天所有对话（含工具调用与结果）一字不差落盘，每 15 轮触发一次，跨天启动自动清理。
-- 语义意图判断：每条消息先由 deepseek-flash 判断「tool / chat」，工具走 deepseek，闲聊走 glm。
-- 思考链：模型返回 reasoning_content 时打印到控制台，便于诊断 AI 决策过程。
+- 语义意图判断：每条消息先由 chat 策略判断「tool / chat」，带最近 4 条上下文（已 sanitize），
+  并按「分类规则 / 背景对话 / 待分类消息」三段标记隔离。
+- 提示词分级：主请求内 system 消息按 P0（身份）/ P1（规则）/ P2（档案）/ P3（上下文）分级，
+  标签统一为【P级别·名称】。P0 身份优先级最高，硬顶 AI 身份追问；P1 含核心原则、说话风格与输出格式、
+  图片处理规则、XMKJ 规则；P2 为主人档案；P3 为图片识别与长期记忆。
+- 思考链：模型返回 reasoning_content 时打印到控制台，格式 [思考链][策略名]，便于诊断 AI 决策过程。
 - 工具日志：每次工具执行输出「工具名 | 耗时 | 状态」到控制台。
+- 审计日志：危险工具每次执行写一行到 audit.log，含 ts、tool、args、sender_id、status、elapsed、result_preview。
 - 视频爬取：现有站点走语义解析（AI 判断），新站点走硬指令「爬取 <url>」（独立 Node 脚本链）。
-- 备份项目：硬指令「@备份项目」直接调 backup_project（跳过意图判断）；自然语言走 AI 语义映射
-            # backup_project 依据 XMKJ.txt（AI 解析）+ mtime 缓存，动态确定打包范围，不再硬编码文件清单
+  单任务异步触发；多任务（含 ＊）在爬取分支内部拆分，走后台串行循环，逐 URL 通知管理员，不阻塞消息锁。
+- 备份项目：硬指令「@备份项目」直接调 backup_project（跳过意图判断）；自然语言走 AI 语义映射。
+  backup_project 依据 XMKJ.txt（AI 解析）+ mtime 缓存，动态确定打包范围，不再硬编码文件清单。

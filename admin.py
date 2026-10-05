@@ -16,6 +16,7 @@ from bot_utils.tool_schema_builder import ToolSchemaBuilder, StringSchema, Integ
 from bot_utils.script_runner import run_bash_script, _fix_missing_newlines
 from bot_utils.checkin import run_checkin
 from bot_utils.episodic import recall
+from bot_utils.media import clean_media
 from memory import knowledge_db
 
 memory = Memory()
@@ -98,6 +99,10 @@ async def recall_conversation(keyword: str) -> str:
             content = content[:200] + "..."
         lines.append(f"[{r.get('ts', '')}] {r.get('role', '')}: {content}")
     return "\n".join(lines)
+
+async def clean_media_tool(scope: str = "both") -> str:
+    """清理 mp4/mp3 文件。scope 可选：downloads、robot、both"""
+    return clean_media(scope)
 # ========== 工具注册表（AI 可调用） ==========
 TOOLS = {
     "checkin": {
@@ -118,6 +123,14 @@ TOOLS = {
         "is_danger": False,
         "params_desc": {
             "keyword": "检索关键词。必须从用户原话中摘取实际出现过的词（如用户说'今天执行过什么命令'，就取'执行'），不要概括成抽象词（如'命令'）"
+        }
+    },
+    "clean_media": {
+        "func": clean_media_tool,
+        "need_confirm": True,
+        "is_danger": True,
+        "params_desc": {
+            "scope": "清理范围：downloads（清空下载目录）、robot（删除根目录mp4/mp3）、both（两者都做）。当用户说'所有'、'全部'、'所有MP4和MP3'时，scope 必须为 both"
         }
     },
     "get_xmkj": {
@@ -450,7 +463,16 @@ async def handle_admin_command(raw_input, sender_id, force_tool_route=False, cha
 
     return None
 
-async def execute_tool_directly(tool_name: str, args: dict, sender_id: str) -> str:
+async def execute_tool_directly(
+    tool_name: str, args: dict, sender_id: str
+) -> str:
+    # 先解析 JSON 字符串，避免后续 args[arg_key] 索引出错
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return "参数格式错误：无法解析 JSON 字符串"
+
     if tool_name == "execute_shell":
         arg_key = "cmd"
     elif tool_name == "run_bash_script":
@@ -462,24 +484,18 @@ async def execute_tool_directly(tool_name: str, args: dict, sender_id: str) -> s
         cmd = args[arg_key]
         if isinstance(cmd, str):
             args[arg_key] = _fix_missing_newlines(cmd)
-
-    # 如果 args 是字符串，尝试解析为字典
-    if isinstance(args, str):
-        try:
-            import json
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            return "参数格式错误：无法解析 JSON 字符串"
     import inspect
     tool = TOOLS.get(tool_name)
     if not tool:
         return f"未知工具：{tool_name}"
-    
-    # 危险工具权限检查
-    if tool.get("is_danger", False):
-        if str(sender_id) != DEFAULT_ADMIN:
-            return f"危险操作 {tool_name} 仅限主管理员执行"
-    
+    # [large-task] 安全防火墙：权限检查和审计日志
+    from bot_utils.security import check_permission, log_audit
+
+    allowed, reason = check_permission(tool_name, sender_id, DEFAULT_ADMIN)
+    if not allowed:
+        log_audit(tool_name, args, sender_id, reason, 0.0, "denied")
+        return reason
+
     func = tool["func"]
     
     # ===== 特殊处理：需要注入 sender_id 的工具 =====
@@ -584,6 +600,10 @@ async def execute_tool_directly(tool_name: str, args: dict, sender_id: str) -> s
             if not isinstance(value, str):
                 valid_params[param_name] = str(value)
 
+    # 显式补上 add_admin/del_admin 的 sender_id，防止被参数过滤跳过
+    if tool_name in ("add_admin", "del_admin"):
+        valid_params["sender_id"] = sender_id
+
     start_time = time.time()
     try:
         if asyncio.iscoroutinefunction(func):
@@ -592,6 +612,9 @@ async def execute_tool_directly(tool_name: str, args: dict, sender_id: str) -> s
             result = func(**valid_params)
 
         elapsed = time.time() - start_time
+
+        # ===== 审计日志（成功） =====
+        log_audit(tool_name, args, sender_id, str(result), elapsed, "success")
 
         # ===== 加分：白名单工具成功执行后 +5 =====
         try:
@@ -607,21 +630,25 @@ async def execute_tool_directly(tool_name: str, args: dict, sender_id: str) -> s
         return result if isinstance(result, str) else str(result)
     except TypeError as e:
         elapsed = time.time() - start_time
+        log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: 参数类型错误")
         logger.error(f"参数类型错误: {e}, 传入: {args}, 有效: {valid_params}", exc_info=True)
         return f"参数错误：{e}\n传入参数：{args}\n有效参数：{valid_params}"
     except ValueError as e:
         elapsed = time.time() - start_time
+        log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: 参数值错误")
         logger.error(f"参数值错误: {e}, 传入: {args}, 有效: {valid_params}", exc_info=True)
         return f"参数值错误：{e}"
     except asyncio.TimeoutError as e:
         elapsed = time.time() - start_time
+        log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: 超时")
         logger.error(f"工具执行超时: {e}, 工具: {tool_name}", exc_info=True)
         return f"工具执行超时：{str(e)}"
     except Exception as e:
         elapsed = time.time() - start_time
+        log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: {str(e)[:50]}")
         logger.error(f"工具执行异常: {e}, 工具: {tool_name}", exc_info=True)
         return f"执行失败：{str(e)}"

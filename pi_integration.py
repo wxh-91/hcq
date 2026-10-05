@@ -30,18 +30,31 @@ def _make_async_wrapper(sync_func):
 def _register_echo_tools(tool_backend: PIToolBackend) -> None:
     try:
         import admin
+        from cl import DEFAULT_ADMIN  # [fix] 用于给 add_admin/del_admin 注入 sender_id
     except ImportError as e:
-        print(f"[pi_integration] 警告: 无法导入 admin 模块，跳过工具注册: {e}")
+        print(f"[pi_integration] 警告: 无法导入 admin 模块或 cl，跳过工具注册: {e}")
         return
     tools_dict = getattr(admin, "TOOLS", {})
     if not tools_dict:
         print("[pi_integration] 警告: admin.TOOLS 为空，无工具可注册")
         return
     registered_count = 0
-    for tool_name, tool_func in tools_dict.items():
+    for tool_name, meta in tools_dict.items():
+        tool_func = meta.get("func")  # [fix] TOOLS 的 value 是字典，提取 func
         if not callable(tool_func):
             continue
-        async_wrapper = _make_async_wrapper(tool_func)
+
+        # [fix] 区分同步/异步，add_admin/del_admin 注入默认 sender_id
+        def make_wrapper(name, func):
+            async def wrapper(**kwargs):
+                if name in ("add_admin", "del_admin"):
+                    kwargs.setdefault("sender_id", DEFAULT_ADMIN)
+                if asyncio.iscoroutinefunction(func):
+                    return await func(**kwargs)
+                return await asyncio.to_thread(func, **kwargs)
+            return wrapper
+
+        async_wrapper = make_wrapper(tool_name, tool_func)
         try:
             tool_backend.register_tool(async_wrapper, name=tool_name)
             registered_count += 1
