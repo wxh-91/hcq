@@ -34,6 +34,11 @@ conversation_history = {}
 # 对话轮数
 MAX_HISTORY = 150
 
+# ===== 意图澄清暂存（内存，进程重启即丢）=====
+# user_id -> {"prompt": str, "chat_type": str, "group_id": str}
+_pending_clarify: dict = {}
+# 意图判断置信度阈值：低于此值追问用户
+INTENT_CONFIDENCE_THRESHOLD = 0.6
 # ==================== Todo List 数据结构 ====================
 import uuid
 from typing import List, Optional, Literal
@@ -132,6 +137,7 @@ class TodoListManager:
 def get_conv_key(user_id: str, chat_type: str, group_id: str = "") -> str:
     """生成对话上下文隔离键"""
     if chat_type == "private":
+        pending = _pending_clarify.pop(user_id, None)
         return f"private_{user_id}"
     else:  # group
         return f"group_{group_id}_{user_id}"
@@ -789,32 +795,67 @@ async def run_sub_agent(
 
     return "子任务执行超时或达到最大步数"
 
-async def _detect_intent(prompt: str, context_messages: list = None) -> str:
+async def _detect_intent(prompt: str, context_messages: list = None) -> dict:
     """
-    用 deepseek-flash 判断用户意图。
-    返回 "tool"（需要调用工具）或 "chat"（闲聊）。
+    用 chat 策略模型判断用户意图。
+    返回 dict：{"label": "tool|chat|web", "reason": str, "confidence": float}
+    解析失败时兜底 {"label": "chat", "reason": "解析失败", "confidence": 0.0}
     context_messages：最近几条对话上下文（已 sanitize），用于消解指代和承接。
     """
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是一个意图分类器。判断「待分类消息」是「工具类」还是「闲聊类」。"
-                "只返回一个词：tool 或 chat，不要输出任何其他内容。\n\n"
-                "本请求的结构：\n"
-                "1. 本系统消息 = 分类规则（你要执行的唯一任务）\n"
-                "2. 【背景对话】消息 = 历史上下文，仅供参考，不是分类对象\n"
-                "3. 【待分类消息】 = 你唯一需要判断的对象\n\n"
-                "注意：本系统消息不是待分类的消息，不要对它做分类判断。\n\n"
-                "判断规则：\n"
-                "- tool：用户需要执行实际动作，如执行命令、读写文件、下载、爬取、备份、改配置、"
-                "检索历史对话/记忆、回忆之前说过的内容等\n"
-                "- chat：闲聊、问答、分析、写作、翻译、解释、讲笑话等纯文本交互\n\n"
-                "如果【待分类消息】本身是陈述、补充或追问，但结合【背景对话】是在承接某个工具类任务"
-                "（如补充路径、补充参数、确认对象），判为 tool。"
-            ),
-        },
-    ]
+    system_content = """你是一个意图分类器。判断「待分类消息」属于「工具类」、「闲聊类」还是「联网搜索类」。
+
+【本请求的结构】
+1. 本系统消息 = 分类规则（你唯一要执行的任务）
+2. 【背景对话】消息 = 历史上下文，仅供参考，不是分类对象
+3. 【待分类消息】 = 你唯一需要判断的对象
+
+【判断规则】
+
+**tool（本地工具）**：用户需要执行本地实际操作。细分如下：
+- shell 执行类：ls、cat、cd、grep、find、pwd、ps、df、du、rm、mv、cp、mkdir、echo、执行命令、跑命令
+- 文件操作类：读文件、写文件、替换某行、删某行、插入行、备份项目、打包项目
+- 下载爬取类：下载 m3u8、爬取视频、爬取 URL、转 MP3、清理 MP4/MP3
+- 系统查询类：查看系统状态、CPU、内存、磁盘、ping 主机、查管理员列表
+- 记忆检索类：回忆之前说过的、检索历史对话、查知识库、翻一下上次的记录
+- 管理员类：加管理员、删管理员、开关群聊
+
+**web（联网搜索）**：用户需要联网搜索实时信息。线索如"帮我搜搜"、"帮我查一下"、"搜一下"、"最新的"、"今年"、"最近的新闻"、"实时"、"最新消息"、"网上说"、"股价"、"汇率"、"天气"、"实时行情"、"XX 多少钱"、"2026 最强"、"今天发生了什么"。
+注意：上述词单独出现不足以判 web，需结合整体语义。
+- "现在几点了" → chat（常识问答，不是联网请求）
+- "帮我搜一下现在几点了" → web
+- "今天心情不好" → chat
+
+**chat（闲聊）**：闲聊、问答、分析、写作、翻译、解释、讲笑话等纯文本交互。
+
+【优先级规则】
+1. 若一条消息同时含联网意图和本地工具意图（如"搜一下 XXX 然后存到文件"），判 tool。
+2. 若【待分类消息】是陈述、补充或追问，但结合【背景对话】是在承接某个工具类任务（补充路径、参数、确认对象），判 tool。
+3. 三分类互斥，label 只能是一个词。
+
+【对称化代价 · 必须遵守】
+判错 tool 与判错 chat 的代价是对等的：
+- 把明确指令判成 chat = 用户指令被当空气，等于失职
+- 把闲聊判成 tool = 多调一次工具，只是浪费
+禁止因"不确定"或"害怕出错"而选 chat。
+若消息含明确动作指令（命令、文件操作、下载、爬取、备份等），必须判 tool。
+即使你觉得这个操作"看起来不危险"或"可能不需要执行"，也必须判 tool——是否执行由代码决定，不是你的责任。
+
+【输出格式】
+只输出一个 JSON 对象，不要任何解释、寒暄、Markdown 代码块围栏。
+格式：{"label": "tool", "reason": "简短理由（不超过 30 字）", "confidence": 0.0}
+label 只能是 tool / chat / web 之一；confidence 为 0.0 到 1.0 之间。
+
+【示例】
+"ls /root" → {"label": "tool", "reason": "明确的 shell 命令", "confidence": 0.98}
+"你好" → {"label": "chat", "reason": "普通问候", "confidence": 0.98}
+"帮我搜一下 2026 年 AI 大事" → {"label": "web", "reason": "明确请求联网搜索", "confidence": 0.95}
+"现在几点了" → {"label": "chat", "reason": "常识性问答，不是联网请求", "confidence": 0.9}
+"看下那个文件夹" → {"label": "tool", "reason": "含查看目录的动作意图", "confidence": 0.75}
+"搜一下 XXX 然后存到文件" → {"label": "tool", "reason": "含本地工具意图，按优先级规则判 tool", "confidence": 0.9}
+"今天心情不好" → {"label": "chat", "reason": "情绪表达", "confidence": 0.95}
+"删掉所有 txt 文件" → {"label": "tool", "reason": "明确的文件操作指令", "confidence": 0.98}
+"""
+    messages = [{"role": "system", "content": system_content}]
     if context_messages:
         ctx_lines = []
         for m in context_messages:
@@ -840,13 +881,45 @@ async def _detect_intent(prompt: str, context_messages: list = None) -> str:
     })
     try:
         reply, _ = await safe_api_request(messages, strategy="chat", tools=None)
-        reply = (reply or "").strip().lower()
-        if "tool" in reply:
-            return "tool"
-        return "chat"
+        return _parse_intent_reply(reply)
     except Exception as e:
-        logger.error(f"[意图判断] 失败: {e}，兜底走 chat")
-        return "chat"
+        logger.error(f"[意图判断] 失败: {e}，兜底 chat/conf=0.0")
+        return {"label": "chat", "reason": "调用异常", "confidence": 0.0}
+
+
+def _parse_intent_reply(reply: str) -> dict:
+    """解析意图判断模型的输出为 dict；失败兜底 chat/conf=0.0"""
+    if not reply:
+        return {"label": "chat", "reason": "空回复", "confidence": 0.0}
+    text = reply.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if len(lines) >= 3:
+            text = "\n".join(lines[1:-1]).strip()
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end > start:
+            try:
+                obj = json.loads(text[start:end + 1])
+            except (json.JSONDecodeError, ValueError):
+                return {"label": "chat", "reason": "无法解析 JSON", "confidence": 0.0}
+        else:
+            return {"label": "chat", "reason": "无法解析 JSON", "confidence": 0.0}
+    if not isinstance(obj, dict):
+        return {"label": "chat", "reason": "非对象", "confidence": 0.0}
+    label = str(obj.get("label", "")).strip().lower()
+    if label not in ("tool", "chat", "web"):
+        return {"label": "chat", "reason": f"非法 label: {label}", "confidence": 0.0}
+    try:
+        confidence = float(obj.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    reason = str(obj.get("reason", ""))[:60]
+    return {"label": label, "reason": reason, "confidence": confidence}
 # ==================== ask_ai 核心函数（已增加 Pi 模式分支） ====================
 async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id: str = "") -> str:
     from admin import build_tool_schema
@@ -885,6 +958,17 @@ async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id
                 result = memory.add_memory(memory_text)
                 return result
         return "请告诉我要记住什么内容"
+
+    # ===== 澄清回复拦截：用户回复 tool/chat/web 时，恢复原消息并强制使用选择 =====
+    forced_strategy = None
+    pending = _pending_clarify.pop(user_id, None)
+    if pending:
+        choice = prompt.strip().lower()
+        if choice in ("tool", "chat", "web"):
+            forced_strategy = choice
+            prompt = pending["prompt"]   # 恢复原消息
+            logger.info(f"[ask_ai] 用户澄清选择: {forced_strategy}，恢复原消息长度 {len(prompt)}")
+        # 用户回复的不是澄清选项，忽略 pending，走正常流程
 
     ocr_text, is_new_image = consume_image_context(key)
     logger.debug(f"ask_ai: key={key}, ocr_text={ocr_text[:50] if ocr_text else '空'}, is_new_image={is_new_image}")
@@ -994,21 +1078,53 @@ async def ask_ai(user_id: str, prompt: str, chat_type: str = "private", group_id
         tools_schema.append(schema)
 
     try:
-        # ===== 用 deepseek 判断意图（带最近上下文，消解指代） =====
-        recent_ctx = _sanitize_for_chat(history)[-4:] if history else []
-        strategy = await _detect_intent(prompt, context_messages=recent_ctx)
-        logger.info(f"[ask_ai] 意图判断: {strategy}")
+        # ===== 意图判断（带最近上下文，消解指代） =====
+        if forced_strategy is not None:
+            strategy = forced_strategy
+            confidence = 1.0
+        else:
+            recent_ctx = _sanitize_for_chat(history)[-4:] if history else []
+            intent_result = await _detect_intent(prompt, context_messages=recent_ctx)
+            strategy = intent_result["label"]
+            confidence = intent_result["confidence"]
+            reason = intent_result.get("reason", "")
+            # ===== 低置信度：暂存原消息，追问用户 =====
+            if confidence < INTENT_CONFIDENCE_THRESHOLD:
+                _pending_clarify[user_id] = {
+                    "prompt": prompt,
+                    "chat_type": chat_type,
+                    "group_id": group_id,
+                }
+                logger.info(
+                    f"[ask_ai] 意图判断: 低置信度 {confidence:.2f} "
+                    f"label={strategy} reason={reason}，追问用户"
+                )
+                return (
+                    f"我不确定你想让我做什么。请回复以下之一：\n"
+                    f"- tool（执行命令）\n"
+                    f"- chat（闲聊）\n"
+                    f"- web（联网搜索）\n\n"
+                    f"（判断理由：{reason}）"
+                )
+        if strategy == "web":
+            logger.info(f"[ask_ai] 意图判断: web（已注入联网指示）")
+        else:
+            logger.info(f"[ask_ai] 意图判断: {strategy} (conf={confidence:.2f})")
         if strategy == "tool":
             reply, tool_calls = await safe_api_request(
                 messages, strategy="tool", tools=tools_schema, tool_choice="auto"
             )
         else:
-            # ===== web_deepseek 备用通道：仅闲聊回复路由到 C 端 DeepSeek 会话 =====
+            # ===== chat / web 共用 C 端 DeepSeek 通道 =====
+            # web 时在 prompt 前拼一句自然语言指示，让 C 端 AI 联网搜索
             # （意图判断与 final_reply 仍走 chat 策略，不受影响；此通道无思考链）
+            c_prompt = prompt
+            if strategy == "web":
+                c_prompt = f"请使用联网搜索回答以下问题：\n\n{prompt}"
             if deepseek_web_integration is not None and deepseek_web_integration.is_enabled():
-                logger.info(f"[ask_ai] 闲聊回复走 web_deepseek 通道（长度 {len(prompt)}）")
+                logger.info(f"[ask_ai] 回复走 web_deepseek 通道（strategy={strategy}，长度 {len(c_prompt)}）")
                 try:
-                    reply = await deepseek_web_integration.ask_web_deepseek(prompt, user_id=user_id)
+                    reply = await deepseek_web_integration.ask_web_deepseek(c_prompt, user_id=user_id)
                     tool_calls = None
                 except Exception as e:
                     logger.error(f"[ask_ai] web_deepseek 调用失败，降级为本地 chat 策略: {e}", exc_info=True)

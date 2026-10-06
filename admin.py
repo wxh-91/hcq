@@ -516,21 +516,26 @@ async def execute_tool_directly(
     # ===== 参数过滤与别名映射 =====
     sig = inspect.signature(func)
     valid_params = {}
-    
+    valid_param_names = set(sig.parameters.keys())
+
     # 定义常见别名映射（参数名 → 标准名）
+    # [fix] 别名只在"目标名存在于函数签名、且原名不在签名里"时才生效。
+    #       原逻辑无条件映射，导致 write_file 的 content 被误映射为 new_content，
+    #       随后按签名过滤时被丢弃，最终缺 content 报 TypeError。
     alias_map = {
         "path": "filepath",
         "file": "filepath",
-        "content": "new_content",      # 用于 replace_line/insert_line
+        "content": "new_content",      # 仅对 replace_line/insert_line 生效
         "line": "line_num",
         "line_number": "line_num",
     }
-    
-    # 1. 先将别名转换为标准名
+
+    # 1. 别名转换（条件映射）
     normalized_args = {}
     for k, v in args.items():
-        if k in alias_map:
-            normalized_args[alias_map[k]] = v
+        target = alias_map.get(k)
+        if target and target in valid_param_names and k not in valid_param_names:
+            normalized_args[target] = v
         else:
             normalized_args[k] = v
     
