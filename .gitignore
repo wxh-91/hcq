@@ -54,3 +54,8 @@ venv*/
 __pycache__/
 backups/
 secrets/
+
+# === 隔离区（禁止开源，2026-11-21）===
+jm_tool/
+plugins/jm_tool/
+config_center/settings.py
