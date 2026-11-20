@@ -10,7 +10,7 @@ deepseek_web_integration.py — C 端 DeepSeek 会话（网页版）接入封装
 - PoW：DeepSeekHashV1 挑战。求解器为内联 Node 脚本，加载 booleamu 包内置
   sha3_wasm_bg.wasm（同一 Rust 编译产物，Node 原生 WebAssembly 零依赖运行）；
   wasm 路径可用环境变量 DEEPSEEK_POW_WASM 覆盖
-- 结构化日志：/root/robot/web_deepseek.log（追加，每行一条 JSON：call/init/restart），
+- 结构化日志：${PROJECT_ROOT}/web_deepseek.log（追加，每行一条 JSON：call/init/restart），
   用于统计成功率、延迟分布、失败原因分布
 - 对外接口不变：ask_web_deepseek / is_enabled / get_api_key / close
 
@@ -203,7 +203,7 @@ async def _ensure_initialized() -> None:
         if not api_key:
             _log_event("init", "", "fail", time.monotonic() - t0, "init_fail")
             raise RuntimeError(
-                f"未配置 {API_KEY_ENV}（请在 /root/robot/.env 或环境变量中提供网页版 User Token）"
+                f"未配置 {API_KEY_ENV}（请在 ${PROJECT_ROOT}/.env 或环境变量中提供网页版 User Token）"
             )
         if not _pow_wasm_path():
             _log_event("init", "", "fail", time.monotonic() - t0, "init_fail")

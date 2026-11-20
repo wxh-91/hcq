@@ -24,7 +24,7 @@
 <!-- AUTO-STRUCTURE-START -->
 ```
 # =====================================================================
-# 项目框架_全量版 —— /root/robot（软链接 → /home/wxh/robot）
+# 项目框架_全量版 —— ${PROJECT_ROOT}（软链接 → /home/wxh/robot）
 # 生成时间：2026-10-18    审计方式：全量遍历 + import 依赖分析 + TOOLS 注册表核对
 # 注释约定：# 【类型】说明 + 依赖标注（被 x 顶层/延迟 import ｜ 仅被 x 调用 ｜ 独立脚本零引用）
 # 审计范围：项目自有源码与配置；已排除 venv/venv310/__pycache__/.git/node_modules/downloads/backups 内容
@@ -144,7 +144,7 @@
 │   ├── system_ops/                 # 【系统操作】wj.py（文件读写改插 + backup_project 打包）、xt.py（系统状态/shell/ping）、script_runner.py（Bash 脚本执行）
 │   │                               # 被 admin.py 顶层 import：read_file/write_file/backup_project/system_status/execute_shell/ping_host/run_bash_script
 │   ├── crawler/                    # 【视频爬取】video_crawler.py + robust_crawler.py + Node 链 crawler_tools/（probe.js/run.js/dom_hook.js）+ fetch_by_id.js/download_video.js/diag.js
-│   │                               # 仅被 dz.py 延迟 import（「爬取 <url>」硬指令）；node 子进程按硬编码 /root/robot/plugins/crawler/... 路径调用
+│   │                               # 仅被 dz.py 延迟 import（「爬取 <url>」硬指令）；node 子进程按硬编码 ${PROJECT_ROOT}/plugins/crawler/... 路径调用
 │   ├── scheduler/                  # 【定时调度】周期任务注册与触发
 │   ├── tasks/                      # 【后台任务】长任务登记、状态查询与回推
 │   ├── proposal_center/            # 【提案中心】guard.py 提案准入闸门
@@ -189,7 +189,7 @@
 │   │   ├── package.json            # npm 清单：依赖 playwright-extra ^4.3.6 + puppeteer-extra-plugin-stealth ^2.11.2；main=dom_hook.js
 │   │   ├── package-lock.json       # npm 锁文件；node_modules 已安装（41 个包）
 │   │   ├── probe.js                # 【请求探针】隐身无头浏览器（playwright-extra+stealth），监听 xhr/fetch/document/media 请求，抓 m3u8 响应内容
-│   │   │                           # 被 admin.py crawler_probe 工具 node 子进程调用（硬编码路径 /root/robot/bot_utils/crawler_tools/probe.js）
+│   │   │                           # 被 admin.py crawler_probe 工具 node 子进程调用（硬编码路径 ${PROJECT_ROOT}/bot_utils/crawler_tools/probe.js）
 │   │   ├── run.js                  # 【通用 Node 执行器】AI 生成代码写入 workspace/temp_run_<ts>.js，node 执行（10 秒超时），完成后删除
 │   │   │                           # 被 admin.py crawler_run_node 工具调用（硬编码路径，高危工具 need_confirm=true）
 │   │   ├── dom_hook.js             # 【DOM 暴力嗅探】无头浏览器打开网页，自动点击播放按钮，抓 video 标签 src 与 m3u8（默认超时 20 秒）
@@ -226,7 +226,7 @@
     ├── models.json.example         # 【示例配置】models.json 模板
     ├── profile.md                  # 【主人档案】身份+偏好两节；被 ai.py 启动时加载注入【P2·主人档案】
     ├── profile.md.example          # 【示例配置】profile.md 模板
-    ├── requirements.txt            # 【Python 依赖清单】含 pi-backend @ file:///root/robot/pi-backend 本地依赖
+    ├── requirements.txt            # 【Python 依赖清单】含 pi-backend @ file://${PROJECT_ROOT}/pi-backend 本地依赖
     ├── README.md                   # 【项目说明】
     ├── LICENSE                     # 【许可文件】
     ├── .gitignore                  # 【版本控制】Git 忽略规则
@@ -259,7 +259,7 @@
       replace_line/delete_line/insert_line/ping_host/backup_project/execute_shell/system_status/list_admin/add_admin/
       del_admin/set_group_chat_enabled/get_group_chat_status/download_m3u8/run_bash_script
 - 子进程调用链（非 import）：video_crawler.py → diag.js / fetch_by_id.js → download_video.js；
-    admin.py 爬虫工具 → crawler_tools/probe.js、run.js、dom_hook.js（硬编码 /root/robot/... 路径）
+    admin.py 爬虫工具 → crawler_tools/probe.js、run.js、dom_hook.js（硬编码 ${PROJECT_ROOT}/... 路径）
 - 独立辅助脚本（不参与主流程，手动运行）：open_source.py、xmkj_to_html.py、scripts/switch_account.sh、scripts/stop_all.sh
 - 疑似死代码（全库零 import 引用 + 未注册工具）：tool_server.py —— 唯一明确可删；
     open_source.py / xmkj_to_html.py 零引用但属于有意保留的手动工具，删除前需确认不再使用
@@ -294,7 +294,7 @@
 - 签到开关 CHECKIN_ENABLED：dz.py on_bot_connect 与 admin.py checkin 工具均受控
 - 爬虫架构分层：Python 层（video_crawler.py / admin.py 工具）→ Node 层（crawler_tools JS / 站点 JS）→ 输出经 security_scanner 清洗
 - 备份体系：backup_project 工具 → wj.py → backup_manifest.py（AI 解析 XMKJ.txt）→ backup_manifest.json → zip 到 backups/
-- 路径注意：admin.py / 运维脚本中硬编码 /root/robot/...（软链接→/home/wxh/robot）；scripts 引用 /root/Napcat 外部目录
+- 路径注意：admin.py / 运维脚本中硬编码 ${PROJECT_ROOT}/...（软链接→/home/wxh/robot）；scripts 引用 /root/Napcat 外部目录
 - 备份口径（backup_project）：根级源码与配置 + bot_utils + pi_backend + plugins + docs + monitor；排除 venv/venv310/__pycache__/.git/node_modules/downloads/backups
 ```
 <!-- AUTO-STRUCTURE-END -->

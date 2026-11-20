@@ -3,7 +3,7 @@
 
 用法：
     python inject_experience.py seed_sops.json
-    python inject_experience.py seed_sops.json --db /root/robot/plugins/core_utils/experience.db
+    python inject_experience.py seed_sops.json --db ${PROJECT_ROOT}/plugins/core_utils/experience.db
 
 JSON 格式（数组，或 {"sops": [...]}）：
 [

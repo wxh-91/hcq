@@ -1757,7 +1757,7 @@ async def _auto_file_proposal(code, args, raw, tool_name=""):
             patch.extend("    - %s" % t for t in targets)
     if ptype == "config_change":
         patch.append("config_change:")
-        patch.append("  target: \"/root/robot/config_center/settings.py\"")
+        patch.append("  target: \"%s/config_center/settings.py\"" % _ROOT)
         patch.append("  mode: \"human_apply_only\"   # 主人已授权：AI 只可上奏，不得代改")
     if ptype == "tool_gap":
         patch.append("tool_gap:")

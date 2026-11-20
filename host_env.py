@@ -54,7 +54,7 @@ def format_env_snapshot(keys=None) -> str:
     snap = get_env_snapshot(keys)
     if not snap:
         return ""
-    lines = ["【本地宿主环境情报】", "你运行在 WSL（/root/robot）内，但有一个 Windows 宿主可供 execute_shell 直接调用："]
+    lines = ["【本地宿主环境情报】", "你运行在 WSL（${PROJECT_ROOT}）内，但有一个 Windows 宿主可供 execute_shell 直接调用："]
     for k, v, desc in snap:
         if not v:
             continue

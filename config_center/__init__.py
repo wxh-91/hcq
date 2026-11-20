@@ -7,7 +7,7 @@
 - 严禁任何工具/脚本/装饰器改写 settings.py 与 wcu_policy.json（已 chattr +i 锁定）。
 
 Console 热更新通道（运行时覆盖层，不回写锁定文件）：
-- /root/robot/config_center/console_overlay.json 由网关 /api/config 写入；
+- ${PROJECT_ROOT}/config_center/console_overlay.json 由网关 /api/config 写入；
 - get_config 每次调用优先读取覆盖层，命中即返回覆盖值，下次业务调用即生效；
 - 覆盖层缺失/损坏时自动回落到 settings.py 基线。
 
