@@ -23,264 +23,279 @@
 
 <!-- AUTO-STRUCTURE-START -->
 ```
+# =====================================================================
+# 项目框架_全量版 —— /root/robot（软链接 → /home/wxh/robot）
+# 生成时间：2026-10-18    审计方式：全量遍历 + import 依赖分析 + TOOLS 注册表核对
+# 注释约定：# 【类型】说明 + 依赖标注（被 x 顶层/延迟 import ｜ 仅被 x 调用 ｜ 独立脚本零引用）
+# 审计范围：项目自有源码与配置；已排除 venv/venv310/__pycache__/.git/node_modules/downloads/backups 内容
+# =====================================================================
+
 项目根目录/
 │
-├── dz.py                          # 【QQ端主入口】NoneBot 消息分发器，处理 QQ 私聊/群聊消息、图片、文件
-│                                  # 群聊非管理员返回无权限提示；文件下载异常分层捕获并返回用户友好信息
-│                                  # 支持 @切换到pi / @切换到api 指令，在 API 和 Pi 后端间实时切换
-│                                  # 私聊拦截 #大型 开头的消息，异步转入 large_task 五阶段流程，不阻塞消息锁
-│                                  # 支持「爬取 <url>」硬指令，单任务异步触发新站点视频下载
-│                                  # 「爬取」多任务（含 ＊）走后台串行循环，逐 URL 通知管理员，不阻塞消息锁
-│                                  # 全角星号 ＊ 分隔多任务（非爬取），进入任务队列串行执行
-│                                  # 启动时清理过期情景记忆，Bot 连接后执行签到检查
-│
-├── admin.py                       # 【工具注册与路由】所有 AI 可调用工具的注册表，以及工具执行入口
-│                                  # 工具参数自动类型转换（str→int/bool）；异常分层捕获（TypeError/ValueError/TimeoutError）
-│                                  # 所有异常记录完整堆栈日志；工具成功执行后触发加分（白名单）
-│                                  # 每次工具执行输出「工具名 | 耗时 | 状态」日志
-│                                  # 执行入口 execute_tool_directly 接入 security.py 的权限检查与审计日志
-│                                  # 危险工具仅主管理员可执行，无二次确认机制
-│                                  # 注册工具：checkin、query_knowledge、get_xmkj、agent_manager、read_file、
-│                                  # write_file、replace_line、delete_line、insert_line、ping_host、
-│                                  # backup_project、execute_shell、system_status、list_admin、add_admin、
-│                                  # del_admin、set_group_chat_enabled、get_group_chat_status、download_m3u8、
-│                                  # run_bash_script、recall_conversation、clean_media
-│                                  # 快速硬指令：备份项目、系统状态、管理员列表
-│
-├── ai.py                          # 【AI 核心引擎】对话管理、历史压缩、多 API Key 轮询、TodoList 规划器、子代理
-│                                  # tool_calls 标准流程（AI初始回复→执行工具→提交结果→AI最终总结）
-│                                  # 语义意图判断：走 chat 策略，判断「tool / chat」，带最近 4 条上下文（已 sanitize）
-│                                  # 决策层（主对话与工具调用）走 tool 策略（deepseek-flash）
-│                                  # 执行层（final_reply、任务映射排序）走 chat 策略（deepseek-v4-flash-0731）
-│                                  # 闲聊默认走 chat 策略；web_deepseek 策略启用时经 ask_ai 路由到 C 端 DeepSeek 网页版会话备用通道
-│                                  # 意图判断按「分类规则 / 背景对话 / 待分类消息」三段标记隔离
-│                                  # 思考链打印：模型返回 reasoning_content 时输出到控制台，格式 [思考链][策略名]
-│                                  # 提示词分级：P0 身份 / P1 规则 / P2 档案 / P3 上下文，分段常量独立定义
-│                                  # 分段常量：PROMPT_P0_IDENTITY、PROMPT_P1_CORE、PROMPT_P1_STYLE、
-│                                  # PROMPT_P1_IMAGE、PROMPT_P1_XMKJ；SYSTEM_PROMPT 为五段拼接的向后兼容常量
-│                                  # 标签统一为【P级别·名称】，主请求内 system 消息按级别顺序注入
-│                                  # 启动时加载 profile.md（PROFILE_CONTENT），注入为【P2·主人档案】
-│                                  # 长期记忆注入到 P3 位置（history 之前），标签【P3·长期记忆】
-│                                  # _sanitize_for_chat()：降级 tool_calls 与 role=tool 为纯文本，防 chat 模型模仿
-│                                  # 摘要生成（_call_ai_no_compress）固定走 chat 策略
-│                                  # 非工具路径保存对话历史，触发情景记忆落盘检查
-│                                  # 集成 pi_integration，根据当前模式选择调用 API 或 Pi 后端
-│                                  # 顶部 try/except 导入 deepseek_web_integration，导入失败仅告警，不影响启动
-│                                  # 意图判断（_detect_intent）与 final_reply 固定走 chat 策略，不路由到 C 端
-│
-├── deepseek_web_integration.py   # 【C 端 DeepSeek 会话接入封装层】管理 deepseek-mcp-server（Node 社区逆向包）子进程生命周期
-│                                  # 认证用 DEEPSEEK_USER_TOKEN（chat.deepseek.com 网页版会话，免费）；走 stdio 协议与官方 mcp SDK 通信
-│                                  # 长驻 worker + 请求队列架构：MCP 客户端 enter / 调用 / exit 全部在单一 worker task 内完成，
-│                                  # 外部 ask_web_deepseek() 投递请求并 await Future，避免 anyio cancel scope 跨 task 报错
-│                                  # 调用失败（非超时）自动重建 session 重试一次，超时重建不重试；worker 崩溃自愈
-│                                  # 按用户维护 session_key 续接多轮上下文（服务端内存态缓存，30 分钟 TTL，子进程重启失效）
-│                                  # 结构化日志写 web_deepseek.log（call / init / restart，每行一条 JSON）
-│                                  # 提供 is_enabled()、ask_web_deepseek()、close()；此通道不提供思考链
-│                                  # 依赖 models.json 中 web_deepseek 策略的 enabled 开关（默认关闭）
-│
-├── pi_integration.py              # 【Pi 后端封装层】管理 Pi 进程生命周期、模式切换、工具注册与调用
-│                                  # 提供 init_pi_backend()、close_pi_backend()、ask_pi()、set_mode()、get_mode()
-│                                  # 懒初始化：仅在切换到 Pi 模式时启动子进程
-│                                  # 流式滑窗超时机制，处理大数据量输出，防止管道堵塞
-│
-├── memory.py                      # 【持久化存储】基于 JSON 的内存管理，保存管理员列表、群聊开关、长期记忆
-│                                  # 提供 load_profile() 读取同目录 profile.md，文件缺失或读取失败返回空串
-│                                  # save 函数含写入异常处理和临时文件清理；KnowledgeDB 类管理 SQLite 知识库
-│                                  # 长期记忆采用 MemoryRecord 生命周期模型：创建→休眠→唤醒→再强化→衰减→遗忘→清除
-│                                  # 指数衰减半衰期 30 天；命中时 confidence +0.2、access_count +1、状态恢复 active
-│                                  # 兼容旧格式：纯字符串自动迁移为 MemoryRecord 字典
-│
-├── cl.py                          # 【配置加载】读取 .env 环境变量，加载 API Key 列表、基础 URL、默认管理员
-│                                  # 含 MODEL_NAME、BACKUP_BASE、BACKUP_KEY；提供 load_models_config()、
-│                                  # get_strategy_config()、detect_strategy() 函数
-│
-├── models.json                    # 【多模型策略配置】定义 7 种策略的模型、地址、密钥
-│                                  # chat 策略：deepseek-v4-flash-0731（A6api，执行层，含思考链）
-│                                  # tool 策略：deepseek-flash（旧站，日常工具调用）
-│                                  # fallback 策略：DeepSeek-V4-Pro（备用站）
-│                                  # large_planner 策略：deepseek-v4-pro（旧站，大型任务总规划师）
-│                                  # large_executor 策略：deepseek-v4-flash-0731（A6api，大型任务执行员）
-│                                  # large_summarizer 策略：qwen/qwen3.6-35b-a3b（matrix，大型任务纯文本总结员）
-│                                  # web_deepseek 策略：C 端 DeepSeek 网页版会话备用通道（enabled 默认 false，
-│                                  # timeout 120、conversation_memory true；需 DEEPSEEK_USER_TOKEN，不提供思考链）
-│
-├── tool_server.py                 # 【历史遗留】Socket 服务端，监听 127.0.0.1:9999
-│                                  # 接收 Pi 扩展发来的工具调用请求，调用 execute_tool_directly 执行并返回结果
-│
-├── ocr.py                         # 【图像识别】异步下载图片，调用 PaddleOCR 提取文字，支持重试和对比度增强
-│
-├── web_server.py                  # 【Web 服务】（暂时废弃）FastAPI + WebSocket，提供前端交互界面
-│                                  # 当前不参与核心运行，保留代码但不启用
-│
-├── web_ui.html                    # 【前端页面】（暂时废弃）纯对话流 Web 终端交互界面
-│                                  # 当前不参与核心运行，保留代码但不启用
-│
-├── fetch_by_id.js                 # 【新站点爬取入口】Node 脚本，输入视频页 URL 或 id
-│                                  # 正则抠 id → 读取 cookies.json → 调详情 API → XOR 解密 → 提取 m3u8
-│                                  # 自动调用 download_video.js 完成下载
-│
-├── download_video.js              # 【新站点分片下载】Node 脚本，输入 m3u8 URL
-│                                  # 解析 #EXT-X-KEY → 下载 key 文件（兼容 16B/32B hex）→ 逐个下载分片
-│                                  # AES-128-CBC 解密 → 合并为 video.ts → 校验 TS 同步字节
-│
-├── diag.js                        # 【新站点 cookie 刷新】Playwright 无头浏览器打开详情页
-│                                  # 等待 90 秒让 JS 挑战跑完 → 拿到 js_challenge_passed → cookies.json
-│
-├── profile.md                     # 【主人档案】身份与偏好文件，手动维护，启动时加载进 system prompt
-│                                  # 分「身份」和「偏好」两节，内容由用户定义
-│
-├── pi_backend/                    # 【Pi RPC 通信包】独立子包，提供与 Pi 子进程的 RPC 通信和工具调用协议
-│   ├── __init__.py               # 导出 PIProcess、PIToolBackend、PIBackend
-│   ├── core/                     # 核心模块
-│   │   ├── __init__.py
-│   │   ├── pi_process.py         # 子进程管理（启动/读写/关闭）
-│   │   ├── pi_tool_backend.py    # 工具调用 Socket 后端（注册/执行/响应）
-│   │   └── pi_backend.py         # 高层封装（33 种 RPC 指令发送 + 读取响应）
-│   └── models/                   # RPC 命令/响应模型、工具事件模型（基于 Pydantic）
-│       ├── __init__.py
-│       ├── base_event.py
-│       ├── _internal/            # 内部辅助模型（ToolResultChunk、ToolEndFlag）
-│       ├── rpc_events/           # 33 个命令类 + 33 个响应类
-│       │   ├── base_rpc_event.py
-│       │   ├── client_events/    # 33 个命令定义
-│       │   └── server_events/    # 33 个响应定义
-│       └── tool_events/          # 工具事件（ToolExecution、ToolResult、ToolExecutionEnd）
-│
-├── memory.json                    # 【运行时数据】存储管理员、群聊状态、长期记忆、episodic_state 计数器
-│                                  # 长期记忆以 MemoryRecord 结构化存储
-│                                  # 字段：content、created_at、last_accessed_at、access_count、confidence、status
-│
-├── scores.json                    # 【工具分数】记录每个白名单工具的成功次数与最近成功时间
-│                                  # 字段：score、last_success、success_count
-│
-├── episodic.log                   # 【情景记忆】当天所有对话记录（user / assistant / tool）
-│                                  # 每行 JSON：ts、date、turn、role、content
-│                                  # 跨天时启动自动清理，只保留当天
-│
-├── checkin_state.json             # 【签到状态】记录今日是否已签到、签到时间、获得额度
-│
-├── knowledge.db                   # 【知识库数据库】SQLite 文件，存储 user_preferences、solution_history、conversation_summary
-│
-├── audit.log                      # 【审计日志】记录每次危险工具的执行意图与结果
-│                                  # 每行 JSON：ts、tool、args、sender_id、status、elapsed、result_preview
-│                                  # status 取值：success / failed / denied
-│
-├── web_deepseek.log               # 【C 端通道结构化日志】C 端 DeepSeek 通道每次调用 / 初始化 / 重启记录一行
-│                                  # 追加模式，每行一条 JSON：ts、event、user、status、elapsed、reason
-│                                  # event 取值 call / init / restart；status 取值 ok / fail
-│                                  # reason 取值 401 / 429 / timeout / empty / init_fail / restart_fail / other
-│                                  # 用于统计成功率、延迟分布与失败原因分布
-│
-├── .env                           # 【环境变量】存放 NEWAPI_BASE、NEWAPI_KEY、MODEL_NAME、BACKUP_BASE、BACKUP_KEY 等敏感信息
-│
-├── backups/                       # 【自动备份目录】由 backup_project 工具生成的项目代码 zip 包
-│
-├── downloads/                     # 【视频下载目录】按「月-日」分类，文件名用生成 mp4 时的时间戳
-│                                  # 结构：downloads/09-12/233957.mp4
-│
-└── bot_utils/                     # 【工具函数包】
-    ├── wj.py                      # 文件操作：读/写/删/改/插行，自动备份，路径安全处理
-    │                              # backup_project：依据 backup_manifest 动态打包项目，自动过滤黑名单与去重
-    ├── backup_manifest.py         # 备份清单管理：读 XMKJ.txt → 调 AI（tool 策略）解析 → 写 backup_manifest.json
-    │                              # 提供 is_manifest_stale()（mtime 比对）、refresh_manifest()、load_manifest()
-    │                              # 硬排除黑名单 BLACKLIST = ['backups', 'downloads']
-    ├── xt.py                      # 系统操作：查看 CPU/内存/磁盘，执行 shell 命令（带超时），ping 检测
-    ├── admin_gh.py                # 管理员管理：增删查（仅主管理员可操作）
-    ├── downloader.py              # 视频下载：自动识别 m3u8 是否加密，支持 yt-dlp/FFmpeg 及加密流解密合并
-    ├── script_runner.py           # 脚本执行：运行 AI 生成的 Bash 脚本（带换行修复和超时控制）
-    ├── local_parser.py            # 日志/配置文件解析：统计错误行数、grep 匹配、提取 key=value
-    ├── checkin.py                 # 签到：执行 /home/wxh/checkin.sh，解析日志，记录状态，私聊通知
-    ├── video_crawler.py           # 新站点视频爬取：调 fetch_by_id.js，ffmpeg 转 mp4，按日期分类存放
-    ├── scores.py                  # 权重系统：分数读写、指数衰减（半衰期 15 天）、白名单加分
-    ├── media.py                   # 转MP3：通过B站插件下载视频MP4，再通过硬指令"转MP3"转成MP3
-    │                              # 无论成功还是失败都删除原MP4
-    │                              # 通过自然语言调用清理工具："帮我删除所有MP4和MP3"等
-    ├── task_queue.py              # 任务队列：全角星号拆分、AI 映射工具、分数排序、串行执行
-    ├── episodic.py                # 情景记忆：落盘检查（每 15 轮）、按关键词检索、跨天清理
-    ├── security.py                # 安全约束：权限检查（危险工具仅主管理员）+ 审计日志
-    │                              # 无确认机制；提供 check_permission()、log_audit()
-    ├── large_task.py              # 大型任务五阶段处理器
-    │                              # 阶段1 规划（large_planner）：输出 JSON 子任务列表
-    │                              # 阶段2 执行（large_executor）：逐个子任务执行，工具调用写死
-    │                              # 阶段3 失败处理：依赖链断则中断，独立失败则跳过
-    │                              # 阶段4 总结（large_summarizer）：生成人话汇报
-    │                              # 阶段5 清理：删除内存上下文
-    │                              # 128k 上下文只存内存；同一 user_id 同时只允许一个大型任务
-    │                              # 通过 notify 回调向外发消息，不直接操作 bot
-    │
-    └── tool_schema_builder/       # 【OpenAI Schema 构建子包】独立工具包，可单独复用
-        ├── __init__.py            # 导出所有核心类
-        ├── traits/                # 协议定义
-        │   ├── __init__.py
-        │   └── to_schema_able.py  # 定义 ToSchemaAble 协议（所有 Schema 需实现 to_schema 方法）
-        ├── core/                  # 核心构建器
-        │   ├── __init__.py
-        │   └── tool_schema_builder.py  # 链式构建器：设置参数 → 构建对象 → 生成完整 Schema
-        └── models/                # Schema 模型（符合 JSON Schema 标准）
-            ├── __init__.py        # 统一导出所有模型类
-            └── schemas/           # 各类具体 Schema
-                ├── base_schema.py          # 基类：提供 to_schema 和 description 字段
-                ├── base_multiple_schema.py # 组合基类（anyOf/oneOf/allOf 共用）
-                ├── string_schema.py        # string 类型（支持 enum, minLength, maxLength）
-                ├── integer_schema.py       # integer 类型（支持范围、倍数、枚举）
-                ├── number_schema.py        # number 类型（支持范围、倍数、枚举）
-                ├── boolean_schema.py       # boolean 类型
-                ├── null_schema.py          # null 类型
-                ├── object_schema.py        # object 类型（含 properties 和 required）
-                ├── array_schema.py         # array 类型（含 items, minItems, maxItems）
-                ├── function_schema.py      # function 定义（用于 tool 的 function 字段）
-                ├── tool_schema.py          # tool 顶层结构（包含 function）
-                ├── all_of_schema.py        # allOf 组合
-                ├── any_of_schema.py        # anyOf 组合
-                └── one_of_schema.py        # oneOf 组合
+├── 【核心引擎】                          # 主链路：dz.py 启动时必须直接或间接加载，缺任一即无法启动
+│   ├── dz.py                       # 【QQ端主入口】NoneBot 消息分发器，处理 QQ 私聊/群聊/图片/文件；群聊非管理员返回无权限提示
+│   │                               # 依赖（顶层 import）：memory、admin、ai、ocr、cl、pi_integration、bot_utils.checkin
+│   │                               # 依赖（消息处理器内延迟 import）：episodic（清理）、divine_task、large_task、video_crawler、task_queue、media
+│   │                               # 指令：@切换到pi/@切换到api 双后端切换；私聊「君权神授」→divine_task 神授循环
+│   │                               # 指令：#大型 → large_task 五阶段；「爬取 <url>」→video_crawler；全角＊多任务→task_queue；转MP3→media
+│   ├── admin.py                    # 【工具注册与路由】AI 可调用工具注册表 TOOLS（25 个）+ 执行入口 execute_tool_directly
+│   │                               # 被引用：dz.py（顶层）、ai.py / divine_task / large_task / task_queue / pi_integration（延迟 import）
+│   │                               # 顶层 import：memory、cl、wj、xt、admin_gh、downloader、script_runner、checkin、episodic、media、tool_schema_builder
+│   │                               # 延迟 import：security_scanner（爬虫输出防注入清洗，2 处）、security（权限+审计）、scores（加分）
+│   │                               # 快速硬指令 FAST_COMMANDS：备份项目/系统状态/管理员列表（不走 AI 直接执行）
+│   │                               # 工具执行入口接入 security.py 权限检查与审计日志；危险工具仅主管理员可执行
+│   ├── ai.py                       # 【AI 核心引擎】对话管理、意图三分类（tool/chat/web）、多 API Key 轮询、多策略路由、子代理
+│   │                               # 被引用：dz.py（顶层）、admin.py / backup_manifest.py / task_queue.py / open_source.py（延迟）
+│   │                               # 顶层 import：pi_integration、memory、cl；try/except 可选 import deepseek_web_integration（失败仅告警）
+│   │                               # 延迟 import：admin（TOOLS、execute_tool_directly、build_tool_schema）
+│   │                               # 决策层走 tool 策略（deepseek-flash），执行层/意图判断走 chat 策略（deepseek-v4-flash-0731）
+│   │                               # 提示词分级 P0身份/P1规则/P2档案/P3上下文；启动时加载 profile.md 注入 P2
+│   ├── cl.py                       # 【配置加载】读取 .env，全项目配置唯一入口
+│   │                               # 被引用（顶层）：dz/admin/ai/memory/pi_integration/deepseek_web_integration/admin_gh/divine_task/large_task/tool_server
+│   │                               # 提供 load_models_config()、get_strategy_config()、detect_strategy()；含 CHECKIN_ENABLED 开关（默认 true）
+│   ├── memory.py                   # 【持久化存储】管理员列表/群聊开关/长期记忆（MemoryRecord 生命周期模型）+ SQLite 知识库 KnowledgeDB
+│   │                               # 被引用（顶层）：dz/admin/ai/episodic/admin_gh
+│   ├── ocr.py                      # 【图像识别】异步下载图片→PaddleOCR 提取文字，支持重试与对比度增强
+│   │                               # 仅被 dz.py 顶层 import
+│   ├── pi_integration.py           # 【Pi 后端封装层】管理 Pi 子进程生命周期、模式切换、工具注册与调用
+│   │                               # 被引用（顶层）：ai.py、dz.py；顶层 import pi_backend 包（完整加载），Pi 子进程懒启动
+│   ├── deepseek_web_integration.py # 【C 端 DeepSeek 会话接入封装层】HTTP 直连版（非 MCP 子进程）
+│   │                               # 仅被 ai.py try/except 可选 import（导入失败仅告警，不影响启动）
+│   │                               # 认证 DEEPSEEK_USER_TOKEN；联网固定传 search_enabled=true；DeepSeekHashV1 PoW 内联 Node 脚本求解
+│   │                               # 协议 create_session → create_pow_challenge → chat/completion（SSE）；结构化日志写 web_deepseek.log
+│   └── pi_backend/                 # 【Pi RPC 通信包】被 pi_integration.py 顶层 import；含 RPC 命令/响应模型（Pydantic）
+│       ├── __init__.py             # 导出 PIProcess、PIToolBackend、PIBackend
+│       ├── core/                   # 核心模块（子进程管理 + 工具后端 + 高层封装）
+│       │   ├── __init__.py         # 包级导出：PIProcess / PIToolBackend / PIBackend
+│       │   ├── pi_process.py       # 子进程管理（启动/读写/关闭）；被 core/__init__.py、pi_backend.py import
+│       │   ├── pi_tool_backend.py  # 工具调用 Socket 后端（注册/执行/响应）；被 core/__init__.py、pi_backend.py import
+│       │   └── pi_backend.py       # 高层封装（33 种 RPC 指令发送+响应读取）；引用 pi_process、pi_tool_backend
+│       └── models/                 # RPC 模型层（基于 Pydantic）
+│           ├── __init__.py         # 
+│           ├── base_event.py       # 事件基类
+│           ├── _internal/          # 内部辅助模型：tool_result_chunk.py（ToolResultChunk）、tool_end_flag.py（ToolEndFlag）
+│           ├── rpc_events/         # 命令类+响应类：client_events 33 个命令类 + server_events 33 个响应类
+│           │                       # client_events：abort/abort_bash/abort_retry/bash/clear_queue/clone/compact/cycle_model/cycle_thinking_level/
+│           │                       #   export_html/follow_up/fork/get_available_models/get_available_thinking_levels/get_commands/get_entries/
+│           │                       #   get_fork_messages/get_last_assistant_text/get_messages/get_session_stats/get_state/get_tree/new_session/prompt/
+│           │                       #   set_auto_compaction/set_auto_retry/set_follow_up_mode/set_model/set_session_name/set_steering_mode/
+│           │                       #   set_thinking_level/steer/switch_session（基类 base_command.py）
+│           │                       # server_events：base_response.py + responses/ 下 33 个响应类（与命令类一一对应，含 state_response）
+│           └── tool_events/        # 工具事件：base_tool_event.py、tool_execution.py、tool_execution_end.py、tool_result.py
+├── 【工具与子包】bot_utils/               # AI 工具实现与业务子模块（物理目录 bot_utils/，被核心引擎直接或经 TOOLS 字典调用）
+│   ├── wj.py                       # 【文件操作】读/写/删/改/插行（自动备份、路径安全处理）+ 项目备份打包
+│   │                               # 被 admin.py 顶层 import（backup_project/read_file/write_file/delete_line/replace_line/insert_line）
+│   │                               # 延迟 import backup_manifest（备份清单管理）
+│   ├── backup_manifest.py          # 【备份清单管理】读 XMKJ.txt → 调 AI（tool 策略）解析 → 写 backup_manifest.json
+│   │                               # 仅被 wj.py 延迟 import；提供 is_manifest_stale/refresh_manifest/load_manifest；硬排除 ['backups','downloads']
+│   ├── xt.py                       # 【系统操作】查看 CPU/内存/磁盘，执行 shell 命令（带超时），ping 检测
+│   │                               # 被 admin.py 顶层 import（system_status/execute_shell/ping_host 工具）
+│   ├── admin_gh.py                 # 【管理员管理】增删查（仅主管理员可操作）
+│   │                               # 被 admin.py 顶层 import（add_admin/del_admin/list_admin 工具）
+│   ├── downloader.py               # 【视频下载】m3u8 下载，加密流自动解密合并（yt-dlp/FFmpeg）
+│   │                               # 被 admin.py 顶层 import（download_m3u8 工具）
+│   ├── script_runner.py            # 【脚本执行】运行 AI 生成的 Bash 脚本（换行修复+超时控制）
+│   │                               # 被 admin.py 顶层 import（run_bash_script 工具）
+│   ├── checkin.py                  # 【签到】执行 /home/wxh/checkin.sh，解析日志，记录状态，私聊通知
+│   │                               # 被 admin.py、dz.py 顶层 import（auto_checkin/run_checkin）；本文件不含开关判断
+│   ├── episodic.py                 # 【情景记忆】落盘检查（15 轮）、按关键词检索、跨天清理
+│   │                               # 被 admin.py 顶层 import（recall）、ai.py、dz.py 延迟 import（clear_expired）
+│   ├── media.py                    # 【转MP3/媒体清理】B站插件下载 MP4 → 硬指令转 MP3；清理 MP4/MP3
+│   │                               # 被 admin.py 顶层 import（clean_media 工具）、dz.py 延迟 import（convert_latest_mp4_to_mp3）
+│   ├── scores.py                   # 【权重系统】分数读写、指数衰减（半衰期 15 天）、白名单加分
+│   │                               # 被 admin.py 执行入口函数内 import（add_score）、task_queue.py 引用
+│   ├── security.py                 # 【安全约束】危险工具权限检查（仅主管理员）+ 审计日志
+│   │                               # 仅被 admin.py 执行入口 execute_tool_directly 函数内 import（check_permission/log_audit）
+│   ├── security_scanner.py         # 【防注入过滤】★NEW 爬虫输出正则清洗（详见文末【新增模块说明】）
+│   │                               # 仅被 admin.py 两个爬虫工具函数内延迟 import（crawler_probe/crawler_dom_hook）——动态调用，非死代码
+│   ├── task_queue.py               # 【任务队列】全角＊拆分、AI 映射工具、分数排序、串行执行
+│   │                               # 仅被 dz.py 延迟 import（＊多任务触发）；延迟 import admin（TOOLS）、scores
+│   ├── large_task.py               # 【大型任务五阶段处理器】规划→执行→失败处理→总结→清理（128k 内存上下文）
+│   │                               # 仅被 dz.py 延迟 import（「#大型」触发）；延迟 import admin（TOOLS/execute_tool_directly）
+│   ├── divine_task.py              # 【神授模式】AI 自主循环 + 多轮决策（单轮 100 步/3600 秒，整体 500 步/10800 秒/150 万 token）
+│   │                               # 仅被 dz.py 延迟 import（「君权神授 <目标>」触发）；延迟 import admin（TOOLS/execute_tool_directly）
+│   │                               # 每轮返回 JSON {done, reason, action}；action.type=tool/ask_user/null；危险判定由 AI 判断
+│   ├── video_crawler.py            # 【新站点视频爬取】node 子进程调 diag.js/fetch_by_id.js + ffmpeg 转 mp4，按日期分类存放
+│   │                               # 仅被 dz.py 延迟 import（「爬取 <url>」硬指令）
+│   └── tool_schema_builder/        # 【OpenAI Schema 构建子包】被 admin.py 顶层 import（build_tool_schema 动态构建工具 Schema）
+│       ├── __init__.py             # 导出所有核心类（ToolSchemaBuilder 等）
+│       ├── traits/                 # 协议定义：to_schema_able.py（ToSchemaAble 协议，所有 Schema 实现 to_schema）
+│       ├── core/                   # 核心构建器：tool_schema_builder.py（链式：设置参数→构建对象→生成完整 Schema）
+│       │   ├── __init__.py         # 包级导出：ToolSchemaBuilder
+│       └── models/                 # Schema 模型（符合 JSON Schema 标准），schemas/ 下 14 个具体模型类
+│           ├── schemas/base_schema.py # 基类（to_schema + description）
+│           ├── schemas/base_multiple_schema.py # 组合基类（anyOf/oneOf/allOf 共用）
+│           ├── schemas/string_schema.py # string（enum/minLength/maxLength）
+│           ├── schemas/integer_schema.py # integer（范围/倍数/枚举）
+│           ├── schemas/number_schema.py # number（范围/倍数/枚举）
+│           ├── schemas/boolean_schema.py # boolean
+│           ├── schemas/null_schema.py # null
+│           ├── schemas/object_schema.py # object（properties/required）
+│           ├── schemas/array_schema.py # array（items/minItems/maxItems）
+│           ├── schemas/function_schema.py # function（tool 的 function 字段）
+│           ├── schemas/tool_schema.py # tool 顶层结构（含 function）
+│           ├── schemas/all_of_schema.py # allOf 组合
+│           ├── schemas/any_of_schema.py # anyOf 组合
+│           └── schemas/one_of_schema.py # oneOf 组合
+├── 【插件生态】plugins/                   # 动态插件目录：主引擎零硬编码 import，经插件加载器按 manifest 注册；契约见 docs/07，信任边界见 docs/12
+│   ├── __init__.py                 # 插件包入口：扫描 plugins/ 各子包并按 manifest 注册
+│   ├── core_utils/                 # 【核心能力】scores 权重衰减 / security 权限与审计 / episodic 情景记忆 / media 转码清理 / aup_tools 工具协议 / tool_schema_builder / backup_manifest 备份清单 / experience_bank 经验库 / log_redact / notify_bridge / feishu_bridge / async_outbox / file_delivery / lexicon
+│   │                               # 被引用（经插件加载器）：admin.py、dz.py、ai.py
+│   ├── system_ops/                 # 【系统操作】wj.py（文件读写改插 + backup_project 打包）、xt.py（系统状态/shell/ping）、script_runner.py（Bash 脚本执行）
+│   │                               # 被 admin.py 顶层 import：read_file/write_file/backup_project/system_status/execute_shell/ping_host/run_bash_script
+│   ├── crawler/                    # 【视频爬取】video_crawler.py + robust_crawler.py + Node 链 crawler_tools/（probe.js/run.js/dom_hook.js）+ fetch_by_id.js/download_video.js/diag.js
+│   │                               # 仅被 dz.py 延迟 import（「爬取 <url>」硬指令）；node 子进程按硬编码 /root/robot/plugins/crawler/... 路径调用
+│   ├── scheduler/                  # 【定时调度】周期任务注册与触发
+│   ├── tasks/                      # 【后台任务】长任务登记、状态查询与回推
+│   ├── proposal_center/            # 【提案中心】guard.py 提案准入闸门
+│   ├── feishu_delivery/            # 【飞书投递】消息与文件下发通道
+│   ├── info_retrieval/             # 【信息检索】检索通道封装
+│   ├── data_utils/                  # 【数据工具】结构化数据读写辅助
+│   ├── visual_arts/                # 【视觉创作】图像生成与编辑通道
+│   ├── windows_control/            # 【桌面控制】剪贴板/窗口/输入模拟（WSL 侧桥接）
+│   ├── shopping/                   # 【购物插件】商品检索通道
+│   ├── shopping_assistant/         # 【选购问答】商品对比与选购建议
+│   ├── gui_shopping/               # 【GUI 购物】界面化下单流程
+│   └── __pycache__/                # 字节码缓存（审计排除）
+├── 【文档库】docs/                        # 项目文档 00～14，按 00 元规范段级覆盖；00 为写作规范与文档地图
+│   ├── 00_元规范与更新协议.md              # 【规范】信息准入四问、更新协议、自检清单、文档地图
+│   ├── 01_项目定位与核心链路.md            # 【投影】系统身份、五端口通道现状、核心请求链路
+│   ├── 02_主引擎职责.md                    # 【投影】入口与主引擎各文件职责
+│   ├── 03_意图与对话编排.md                # 【投影】意图三分类与对话编排
+│   ├── 04_记忆与知识体系.md                # 【投影】长期记忆、情景记忆、知识库
+│   ├── 05_AUP协议与工具注册.md             # 【投影】工具协议与注册中心可见性
+│   ├── 06_权限与审计.md                    # 【投影】角色闸门与审计口径
+│   ├── 07_插件层与扩展契约.md              # 【投影】插件加载与扩展契约
+│   ├── 08_业务闭环索引.md                  # 【投影】业务闭环入口索引
+│   ├── 09_配置与模型策略.md                # 【投影】配置来源与模型策略
+│   ├── 10_生产坐标红线与运维规程.md        # 【坐标】端口/日志/脚本坐标、红线、运维规程
+│   ├── 11_多端生态与原生壳.md              # 【坐标】三端壳坐标、连接契约、公网模式
+│   ├── 12_插件生态与信任边界.md            # 【边界】插件轨道、信任边界、公网来源闸门
+│   ├── 13_运行拓扑与多端架构.md            # 【拓扑】五端口职责、拓扑、公网链路、启动入口
+│   └── 14_多用户鉴权与公网体系.md          # 【设计】多用户鉴权目标架构与公网体系
+├── 【监控与健康】monitor/                  # 8085 KULA 面板与 8086 健康聚合；只绑回环，不对外
+│   ├── __init__.py                 # 包入口
+│   ├── server.py                   # 【8086 健康聚合】/api/health、/api/metrics、/health、POST /api/ingest
+│   ├── aggregator.py               # 多服务指标聚合与上报
+│   ├── metrics.py                  # 指标采集（CPU/内存/进程/端口）
+│   ├── config.yaml                 # 监控配置：端口、采集间隔、保留份数
+│   ├── bin/kula                    # 预编译 KULA 二进制（8085 Web UI 与采集）
+│   ├── data/                       # KULA 时序数据（sessions.json + tier_0/1/2 段文件）
+│   ├── kula.log                    # 8085 启动与采集日志
+│   ├── health.log                  # 8086 启动与健康探测日志
+│   └── __pycache__/                # 字节码缓存（审计排除）
+├── 【爬虫与网络】                         # Node 爬虫工具链与 JS 脚本；全部通过 node 子进程调用，无 Python import 关系
+│   ├── bot_utils/crawler_tools/    # 【Node 爬虫工具链】★NEW npm 包（物理位置在 bot_utils/ 下，被 admin.py 3 个爬虫工具子进程调用）
+│   │   ├── package.json            # npm 清单：依赖 playwright-extra ^4.3.6 + puppeteer-extra-plugin-stealth ^2.11.2；main=dom_hook.js
+│   │   ├── package-lock.json       # npm 锁文件；node_modules 已安装（41 个包）
+│   │   ├── probe.js                # 【请求探针】隐身无头浏览器（playwright-extra+stealth），监听 xhr/fetch/document/media 请求，抓 m3u8 响应内容
+│   │   │                           # 被 admin.py crawler_probe 工具 node 子进程调用（硬编码路径 /root/robot/bot_utils/crawler_tools/probe.js）
+│   │   ├── run.js                  # 【通用 Node 执行器】AI 生成代码写入 workspace/temp_run_<ts>.js，node 执行（10 秒超时），完成后删除
+│   │   │                           # 被 admin.py crawler_run_node 工具调用（硬编码路径，高危工具 need_confirm=true）
+│   │   ├── dom_hook.js             # 【DOM 暴力嗅探】无头浏览器打开网页，自动点击播放按钮，抓 video 标签 src 与 m3u8（默认超时 20 秒）
+│   │   │                           # 被 admin.py crawler_dom_hook 工具 node 子进程调用（硬编码路径）
+│   │   ├── node_modules/           # npm 已安装依赖（审计排除）
+│   │   └── workspace/              # 临时脚本区：run.js 产物目录；switch_account.sh / stop_all.sh 会清空
+│   ├── fetch_by_id.js              # 【新站点爬取入口】正则抠 id → 读 cookies.json → 调详情 API → XOR 解密 → 提取 m3u8 → 调 download_video.js
+│   │                               # 被 video_crawler.py node 子进程调用（1800 秒超时）
+│   ├── download_video.js           # 【新站点分片下载】解析 #EXT-X-KEY → 下载 key → AES-128-CBC 解密分片 → 合并 video.ts → 校验 TS 同步字节
+│   │                               # 被 fetch_by_id.js 内部调用
+│   └── diag.js                     # 【新站点 cookie 刷新】Playwright 无头浏览器等待 90 秒 JS 挑战 → 写 cookies.json
+│   │                               # 被 video_crawler.py node 子进程调用（180 秒超时，cwd 指向工作目录）
+├── 【运维与辅助脚本】                       # 手动运行 / 历史遗留 / 工具脚本，不参与 dz.py 主链路（主代码零 import 引用）
+│   ├── scripts/                    # 【运维脚本】★NEW 手动运行（bash），主代码零引用
+│   │   ├── switch_account.sh       # 【换号脚本】用法：switch_account.sh <旧QQ号>
+│   │   │                           # 流程：杀进程（Napcat QQ/dz.py/xvfb-run/node 爬虫/playwright）→ 删旧 QQ 配置（napcat_<QQ>.json 等 3 个文件）
+│   │   │                           # → 清空 .json.bak 历史备份 → 清 qrcode.png 与 crawler workspace → xvfb-run 启动 Napcat 重新扫码
+│   │   │                           # 引用外部目录：/root/Napcat/opt/QQ/resources/app/app_launcher/napcat（config/cache）
+│   │   └── stop_all.sh             # 【资源清理脚本】流程：杀 dz.py（先 15 后 9）→ 杀 Napcat/QQ/xvfb-run → 杀 node 爬虫与 PoW 残留（node -e）
+│   │   │                           # → 杀 playwright/chrome-linux → 清 crawler workspace → ps 检查残留进程
+│   ├── tool_server.py              # 【历史遗留 Socket 服务端】监听 127.0.0.1:9999，接收 Pi 扩展工具调用并转发 execute_tool_directly
+│   │                               # ★ 疑似死代码：全库零 import 引用（pi_integration.py 中的 _tool_server_task 仅为同名变量，非模块引用）
+│   │                               # 未注册进任何工具表；原 XMKJ.txt 亦标注「保留未启用」——死代码清洗首选
+│   ├── open_source.py              # 【工具脚本】一键开源上传工具；独立脚本，主代码零引用（手动运行 python3 open_source.py）
+│   └── xmkj_to_html.py             # 【工具脚本】XMKJ.txt（或本框架文本）→ HTML 半自动转换；独立脚本，主代码零引用（手动运行）
+│   │                               # 注：xmkj_to_html.py 依赖被解析文档的树形格式，重构文档后仍可复用
+└── 【配置与运行时数据】                      # 配置模板、运行时状态、日志与自动产物；主代码不 import，运行时读写
+    ├── .env                        # 【环境变量】12 个键：DRIVER/ONEBOT_WS_URLS/ONEBOT_ACCESS_TOKEN/API_TIMEOUT/MULTI_SOURCE_DAILY_RENDER_BACKEND
+    │                               #   NEWAPI_BASE/NEWAPI_KEY_1/BACKUP_BASE/BACKUP_KEY/MODEL_NAME/DEEPSEEK_USER_TOKEN/CHECKIN_ENABLED
+    │                               # 被 cl.py 读取；含敏感信息
+    ├── .env.example                # 【示例配置】.env 模板（不含真实密钥）
+    ├── models.json                 # 【多模型策略配置】定义 chat/tool/fallback/large_planner/large_executor/large_summarizer/web_deepseek/divine 8 策略
+    │                               # 被 cl.py 读取（load_models_config/detect_strategy）
+    ├── models.json.example         # 【示例配置】models.json 模板
+    ├── profile.md                  # 【主人档案】身份+偏好两节；被 ai.py 启动时加载注入【P2·主人档案】
+    ├── profile.md.example          # 【示例配置】profile.md 模板
+    ├── requirements.txt            # 【Python 依赖清单】含 pi-backend @ file:///root/robot/pi-backend 本地依赖
+    ├── README.md                   # 【项目说明】
+    ├── LICENSE                     # 【许可文件】
+    ├── .gitignore                  # 【版本控制】Git 忽略规则
+    ├── XMKJ.txt                    # 【旧框架文档】原项目结构说明；被 backup_manifest.py 解析生成备份清单
+    │                               # 本文档（项目框架_全量版.txt）为其全量升级版
+    ├── memory.json                 # 【运行时数据】管理员/群聊状态/长期记忆（MemoryRecord）/episodic_state
+    ├── scores.json                 # 【运行时数据】工具分数（score/last_success/success_count）
+    ├── episodic.log                # 【运行时数据】情景记忆日志（每行 JSON，跨天清理）
+    ├── checkin_state.json          # 【运行时数据】签到状态（今日是否已签/时间/额度）
+    ├── knowledge.db                # 【运行时数据】SQLite 知识库（user_preferences/solution_history/conversation_summary）
+    ├── audit.log                   # 【运行时数据】危险工具审计日志（ts/tool/args/sender_id/status/elapsed/result_preview）
+    ├── web_deepseek.log            # 【运行时数据】C 端通道结构化日志（call/init/restart 事件）
+    ├── backup_manifest.json        # 【自动产物】backup_project 生成的打包清单（AI 解析 XMKJ.txt）
+    ├── backup_manifest.meta.json   # 【自动产物】备份清单元数据（mtime）
+    ├── backups/                    # 【自动产物】backup_project 生成的代码 zip 包目录
+    └── downloads/                  # 【运行时数据】视频下载目录（月-日分类，如 downloads/09-12/233957.mp4）
 
 
-【外部关联组件】（不在项目根目录，但集成使用）
+【依赖关系总览】
+- 主链路（dz.py 启动即加载，缺一不可）：
+    dz.py ─顶层 import→ memory / cl / admin / ai / ocr / pi_integration / bot_utils.checkin
+    admin.py ─顶层→ wj / xt / admin_gh / downloader / script_runner / checkin / episodic / media / tool_schema_builder
+    admin.py ─函数内延迟→ security / security_scanner / scores / backup_manifest（经 wj）
+    ai.py ─顶层→ pi_integration / memory / cl；─可选→ deepseek_web_integration（try/except）
+    ai.py ─函数内延迟→ admin（TOOLS/execute_tool_directly/build_tool_schema）
+    pi_integration.py ─顶层→ pi_backend 包（RPC 模型全量加载，子进程懒启动）
+- 动态加载 / 工具调用（被 AI 经 admin.TOOLS 字典调用，共 25 个）：
+    ★新增 3 个爬虫工具：crawler_probe→probe.js、crawler_run_node→run.js、crawler_dom_hook→dom_hook.js（node 子进程）
+    其余 22 个：checkin/query_knowledge/recall_conversation/clean_media/get_xmkj/agent_manager/read_file/write_file/
+      replace_line/delete_line/insert_line/ping_host/backup_project/execute_shell/system_status/list_admin/add_admin/
+      del_admin/set_group_chat_enabled/get_group_chat_status/download_m3u8/run_bash_script
+- 子进程调用链（非 import）：video_crawler.py → diag.js / fetch_by_id.js → download_video.js；
+    admin.py 爬虫工具 → crawler_tools/probe.js、run.js、dom_hook.js（硬编码 /root/robot/... 路径）
+- 独立辅助脚本（不参与主流程，手动运行）：open_source.py、xmkj_to_html.py、scripts/switch_account.sh、scripts/stop_all.sh
+- 疑似死代码（全库零 import 引用 + 未注册工具）：tool_server.py —— 唯一明确可删；
+    open_source.py / xmkj_to_html.py 零引用但属于有意保留的手动工具，删除前需确认不再使用
 
-~/.pi/agent/
-├── models.json                  # Pi 模型配置文件：定义 provider、API 地址、密钥、模型参数
-└── extensions/
-    └── echo-tools.ts            # Pi 扩展：注册 read_file / write_file / execute_shell / system_status
-                                 # 通过 Socket 调用 tool_server.py 执行工具，返回结果给 Pi
-
+【新增模块说明】
+1. bot_utils/security_scanner.py —— 防注入过滤（★NEW）
+   - 纯 re 实现，零第三方依赖；提供 sanitize_crawler_output(text)
+   - 逻辑：①长度>8000 字符截断（防爆上下文）；②10 条注入/越狱黑名单正则（ignore previous instructions、
+     忽略之前的指令、system prompt、你现在是一个、执行 rm/sudo/sh/bash、<script> 防 XSS、os.system(、subprocess.run( 等）
+     命中即替换为「[已拦截的危险指令]」
+   - 调用方：admin.py 的 crawler_probe 与 crawler_dom_hook 两处函数内延迟 import，清洗爬虫抓回的网页文本
+   - 与 security.py 分工：security.py 管「工具权限+审计」，security_scanner.py 管「外部文本防注入」
+2. bot_utils/crawler_tools/ —— Node 爬虫工具链（★NEW，npm 包）
+   - 依赖：playwright-extra ^4.3.6（隐身浏览器）+ puppeteer-extra-plugin-stealth ^2.11.2；node_modules 已安装（41 包）
+   - probe.js：无头浏览器监听 xhr/fetch/document/media 请求，抓 m3u8 响应前 1000 字符；输出去重请求 JSON
+   - dom_hook.js：自动点击播放按钮（.play/.vjs-big-play-button/[class*=play] 等）→ 抓 video 标签 src/m3u8，默认 20 秒
+   - run.js：AI 生成 Node 代码 → 写 workspace/temp_run_*.js → node 执行（10 秒超时）→ 返回 stdout → 删临时文件
+   - workspace/：临时脚本工作区，由 run.js 写入、运维脚本清空
+3. scripts/ —— 运维控制脚本（★NEW，手动运行，主代码零引用）
+   - switch_account.sh：QQ 换号全流程（杀进程→删旧号配置→清 .bak/缓存→清爬虫工作区→重启 Napcat 扫码）
+   - stop_all.sh：一键资源清理（dz.py/Napcat/QQ/爬虫 Node/PoW node -e/Playwright/工作区→残留检查）
+   - 两者均引用外部目录 /root/Napcat/opt/QQ/...，不依赖本仓库任何模块
 
 【核心方向说明】
-- 当前项目核心端为 QQ 端（dz.py），权重最高，所有新功能优先在 QQ 端落地。
-- Web 端（web_server.py + web_ui.html）当前暂时废弃，不参与核心运行。
-- 未来走向以 QQ 端为主，Web 端是否恢复取决于后续需求评估。
-- 后端支持双模式共存：API 模式（默认，使用中转站多模型）和 Pi 模式（通过本地 Pi 子进程执行命令、操作文件）。
-- 模式切换通过私聊指令 @切换到pi / @切换到api 完成，Pi 后端按需启动，不占用常驻资源。
-- Pi 模式已验证可执行本地 shell 命令、创建和修改文件、运行脚本，并具备流式滑窗超时机制以适应大数据量输出。
-- C 端 DeepSeek 备用通道（web_deepseek 策略）：闲聊回复路径可选路由到网页版会话（DEEPSEEK_USER_TOKEN，免费，不提供思考链），
-  由 models.json 的 enabled 开关控制，调用失败自动降级 chat 策略；意图判断与 final_reply 不路由到该通道。
-- 多模型分工：
-  chat 策略（A6api deepseek-v4-flash-0731）负责日常闲聊与执行层总结；
-  tool 策略（旧站 deepseek-flash）负责日常工具调用决策；
-  fallback 策略（备用站 DeepSeek-V4-Pro）全挂时兜底；
-  large_planner（旧站 deepseek-v4-pro）为大型任务总规划师；
-  large_executor（A6api deepseek-v4-flash-0731）为大型任务执行员，不做决策；
-  large_summarizer（matrix qwen/qwen3.6-35b-a3b）为大型任务纯文本总结员，不承担关键路径；
-  web_deepseek（C 端 DeepSeek 网页版会话，免费）为闲聊备用通道，仅闲聊回复使用，不承担关键路径。
-- 权重系统：按工具记录成功经验分，半衰期 15 天指数衰减，仅白名单工具参与加分。
-- 任务队列：用户通过全角星号 ＊ 分隔多任务，AI 映射工具名并按分数排序，串行执行。
-- 大型任务：私聊发送 #大型 开头的消息触发，五阶段流程（规划→执行→失败处理→总结→清理）。
-  #大型 必须出现在消息最前面，其他位置无效。群聊不触发。
-  规划师输出 JSON 子任务列表，执行员严格照办，总结员生成最终汇报。
-  全程通过私聊通知进度，每个子任务完成推送一条状态。
-  同一用户同时只允许一个大型任务，执行期间拒绝新的大型任务请求。
-- 情景记忆：当天所有对话（含工具调用与结果）一字不差落盘，每 15 轮触发一次，跨天启动自动清理。
-- 语义意图判断：每条消息先由 chat 策略判断「tool / chat」，带最近 4 条上下文（已 sanitize），
-  并按「分类规则 / 背景对话 / 待分类消息」三段标记隔离。
-- 提示词分级：主请求内 system 消息按 P0（身份）/ P1（规则）/ P2（档案）/ P3（上下文）分级，
-  标签统一为【P级别·名称】。P0 身份优先级最高，硬顶 AI 身份追问；P1 含核心原则、说话风格与输出格式、
-  图片处理规则、XMKJ 规则；P2 为主人档案；P3 为图片识别与长期记忆。
-- 思考链：模型返回 reasoning_content 时打印到控制台，格式 [思考链][策略名]，便于诊断 AI 决策过程。
-- 工具日志：每次工具执行输出「工具名 | 耗时 | 状态」到控制台。
-- 审计日志：危险工具每次执行写一行到 audit.log，含 ts、tool、args、sender_id、status、elapsed、result_preview。
-- 视频爬取：现有站点走语义解析（AI 判断），新站点走硬指令「爬取 <url>」（独立 Node 脚本链）。
-  单任务异步触发；多任务（含 ＊）在爬取分支内部拆分，走后台串行循环，逐 URL 通知管理员，不阻塞消息锁。
-- 备份项目：硬指令「@备份项目」直接调 backup_project（跳过意图判断）；自然语言走 AI 语义映射。
-  backup_project 依据 XMKJ.txt（AI 解析）+ mtime 缓存，动态确定打包范围，不再硬编码文件清单。
+- 主入口为 dz.py（QQ 端），AI 工具注册表 TOOLS 现有 25 个工具（较旧 XMKJ.txt 新增 crawler_probe/crawler_run_node/crawler_dom_hook）
+- 后端双模式共存：API 模式（默认）+ Pi 模式（pi_backend RPC，@切换到pi/@切换到api 切换，懒启动）
+- C 端 DeepSeek 通道（deepseek_web_integration.py）：HTTP 直连 chat.deepseek.com，DEEPSEEK_USER_TOKEN 认证，
+  内联 Node 求解 DeepSeekHashV1 PoW，SSE 流式，失败自动降级 chat 策略；models.json web_deepseek.enabled 控制
+- 神授模式（divine_task.py）：「君权神授 <目标>」触发，AI 自主循环，单轮 100 步/3600 秒，整体 500 步/10800 秒/150 万 token
+- 大型任务（large_task.py）：「#大型」触发，五阶段（规划→执行→失败处理→总结→清理），同一用户同时仅允许一个
+- 任务队列（task_queue.py）：全角＊多任务拆分，AI 映射工具并按分数排序，串行执行
+- 签到开关 CHECKIN_ENABLED：dz.py on_bot_connect 与 admin.py checkin 工具均受控
+- 爬虫架构分层：Python 层（video_crawler.py / admin.py 工具）→ Node 层（crawler_tools JS / 站点 JS）→ 输出经 security_scanner 清洗
+- 备份体系：backup_project 工具 → wj.py → backup_manifest.py（AI 解析 XMKJ.txt）→ backup_manifest.json → zip 到 backups/
+- 路径注意：admin.py / 运维脚本中硬编码 /root/robot/...（软链接→/home/wxh/robot）；scripts 引用 /root/Napcat 外部目录
+- 备份口径（backup_project）：根级源码与配置 + bot_utils + pi_backend + plugins + docs + monitor；排除 venv/venv310/__pycache__/.git/node_modules/downloads/backups
 ```
 <!-- AUTO-STRUCTURE-END -->
 

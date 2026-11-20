@@ -33,6 +33,9 @@ deepseek_web_integration.py — C 端 DeepSeek 会话（网页版）接入封装
 - 每次调用为独立 asyncio 操作（aiohttp），无跨 task 生命周期问题；
   close() 关闭复用连接，无子进程残留（Node 求解为短生命子进程，每次 wait 退出）
 """
+import os
+_ROOT = os.environ.get("PROJECT_ROOT") or os.path.dirname(os.path.abspath(__file__))
+
 import asyncio
 import json
 import logging
@@ -46,10 +49,11 @@ logger = logging.getLogger(__name__)
 
 import aiohttp
 
+
 # ========== 常量 ==========
 STRATEGY_NAME = "web_deepseek"
 API_KEY_ENV = "DEEPSEEK_USER_TOKEN"
-LOG_FILE = "/root/robot/web_deepseek.log"   # 结构化日志（追加，每行一条 JSON）
+LOG_FILE = _ROOT + "/web_deepseek.log"   # 结构化日志（追加，每行一条 JSON）
 DEFAULT_TIMEOUT = 120.0
 POW_TIMEOUT = 20.0          # 单次 PoW 求解（含子进程）超时
 # DeepSeekHashV1 求解器 wasm（booleamu 包内置，与 xtekky/deepseek4free 同一文件），
@@ -295,9 +299,21 @@ async def _create_session(session: aiohttp.ClientSession) -> str:
     """新建网页版会话，返回 chat_session_id"""
     data = await _post_json(session, "/chat_session/create", {"agent": "chat"},
                             DEFAULT_TIMEOUT)
-    sid = data["data"]["biz_data"]["id"]
+    # [Bug Buster] 安全取值：接口字段变动时禁止协程崩溃，拿不到 id 抛明确错误
+    # 交由上层（ai.py ask_ai 的 try/except）平滑降级到本地 chat 策略。
+    try:
+        # [抓包实证 2026-10-24] /chat_session/create 原始响应：
+        # data.biz_data.chat_session.id 才是会话 id（biz_data.id 不存在，为 None）
+        _biz = (data or {}).get("data", {}).get("biz_data", {}) or {}
+        _cs = _biz.get("chat_session") or {}
+        sid = _cs.get("id") or _biz.get("id")   # chat_session.id 优先，biz_data.id 兜底
+    except AttributeError:
+        sid = None
     if not sid:
-        raise RuntimeError("C 端 DeepSeek 创建会话失败：返回空 id")
+        raise RuntimeError(
+            "C 端 DeepSeek 创建会话失败：响应缺少会话 id"
+            "（接口可能已变更，原始响应片段: %s）" % str(data)[:120]
+        )
     return sid
 
 

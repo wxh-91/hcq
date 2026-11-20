@@ -1,0 +1,1 @@
+{"allowed_apps": ["计算器", "记事本", "qq", "微信", "edge", "chrome", "mspaint"]}

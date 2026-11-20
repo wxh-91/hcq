@@ -1,0 +1,12 @@
+startup_whitelist:
+  - name: windows_accessibility_tools
+    paths:
+      - "C:\\Windows\\System32\\Magnify.exe"
+      - "C:\\Windows\\System32\\Narrator.exe"
+      - "C:\\Windows\\System32\\osk.exe"
+      - "C:\\Windows\\System32\\utilman.exe"
+    constraints:
+      require_signature: microsoft
+      allow_admin_privilege: false
+      max_instances: 1
+      audit_log: true

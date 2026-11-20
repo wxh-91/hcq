@@ -1,0 +1,19 @@
+version: '2.0'
+
+dir_rule:
+  # 下载位置：base_dir 是根目录，rule 是自动建文件夹的规则（如下载到 /root/robot/downloads/作者/本子名/）
+  base_dir: /root/robot/downloads
+  rule: Bd_Aauthor_Atitle
+  # 如果不想按作者建文件夹，可以把 rule 改成 Bd_Atitle
+
+client:
+  # 开启多线程并发下载，默认是 1（单线程）。设成 5 或 8 会快很多，但太高容易被封 IP
+  thread_count: 5
+
+download:
+  image:
+    # 这里保持pdf，这库的底层会自动把下载的图转成 PDF
+    suffix: .pdf
+
+  # 如果你想把长图转成 webp，可以把上面那行注释掉，换成下面这行：
+  # suffix: .webp

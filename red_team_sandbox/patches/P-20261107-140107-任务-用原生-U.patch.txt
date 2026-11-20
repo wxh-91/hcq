@@ -1,0 +1,7 @@
+ui_automation_whitelist:
+  - name: 画图
+    process: mspaint.exe
+    window_class: MSPaintApp
+    window_title_pattern: "*画图*"
+    allow_actions: [list_controls, click, drag, type_text, send_keys]
+    reason: 系统自带画图工具，需用于图形绘制类任务的 UI 自动化操作

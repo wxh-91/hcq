@@ -1,0 +1,12 @@
+{
+  "id": "P-20261107-160241-目标-在已运行的",
+  "type": "ui_path",
+  "type_label": "UI 自动化路径改造",
+  "description": "目标：在已运行的记事本窗口（Notepad.exe，PID 15040）内执行一次点击操作，验证 UI 自动化通道可用。卡点：调用 win_ui_automation(action=click, app_name=Notepad) 时返回 BLIND_CLICK 并被安全盾物理中止，说明点击动作缺少可定位的目标控件（仅给出 app_name，无 control_name / control_type / 坐标），系统判定为盲点风险并拒绝执行。理由：盲点击可能误触窗口外的其它程序或系统控件，安全盾拦截合理；需要一条受控的授权路径，例如允许\"限定在指定进程窗口范围内的点击\"，或要求必须先解析控件树、拿到明确控件句柄后再点击。请裁决是否开放该授权。",
+  "patch_content": "# 建议方案：为 win_ui_automation 增加受控点击授权配置\nui_automation:\n  click_policy:\n    allow_blind_click: false            # 保持默认关闭，盲点击继续拦截\n    window_scoped_click: true           # 新增：允许限定在目标进程窗口矩形内的点击\n    require_resolved_control: true      # 点击前必须解析出控件名/类型或明确坐标\n    target_window_process_whitelist:    # 仅限白名单进程可被窗口级点击\n      - Notepad.exe\n    max_click_retries: 0                # 被拦截后不自动重试\n    audit_log: true                     # 每次点击记录控件名、窗口矩形、命中点\n\n# 调用侧约定（授权后生效）\n# 1) 先调用 win_ui_automation(action=inspect, app_name=Notepad) 获取控件树\n# 2) 再以 action=click + control_name + control_type 精确点击\n# 3) 若控件树不可用，方允许 window_scoped_click（限定 Notepad 窗口矩形内）",
+  "created_at": "2026-11-07 16:02:41",
+  "status": "pending_human",
+  "applied": false,
+  "channel": "feishu",
+  "principle": "红队只提建议，落地必须由人类裁决"
+}

@@ -1,0 +1,21 @@
+# win_shell 命令白名单建议新增条目（whitelist_add）
+startup_whitelist:
+  executables:
+    - path: 'C:\Windows\System32\magnify.exe'
+      alias: magnify
+      note: Windows 自带放大镜（辅助功能，无网络/无提权）
+      allow_args: []
+      allow_start_process: true
+
+  # 通用放行规则（如允许整个 System32 辅助工具目录，二选一）
+  path_prefix_allow:
+    - 'C:\Windows\System32\magnify.exe'
+    - 'C:\Windows\System32\osk.exe'          # 屏幕键盘（同类辅助功能，可按需）
+
+  # 显式放行 PowerShell 调用形式
+  command_patterns:
+    - regex: '^Start-Process\s+"?C:\\Windows\\System32\\magnify\.exe"?$'
+      shell: powershell
+      action: allow
+
+# 说明：以上仅为建议片段，实际需在安全盾启动拦截规则（UNAUTHORIZED_STARTUP 判定逻辑）中合并生效。

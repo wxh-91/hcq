@@ -1,0 +1,87 @@
+deepseek_web_integration — C 端 DeepSeek 通道
+模块定位
+本项目的一条可选 AI 通道，把消息转发给 DeepSeek 网页版会话，获取回复。
+
+与主通道（API 中转站）并列存在，互不替代。仅在 models.json 中 web_deepseek 策略 enabled=true 时启用。
+
+通信对象
+DeepSeek 网页版（chat.deepseek.com）的内部接口。
+
+该接口为逆向所得，非官方公开 API。服务端有权在任何时刻改变接口结构、认证方式、PoW 算法，改变后本模块可能失效。
+
+认证
+DEEPSEEK_USER_TOKEN 环境变量。
+
+值为 DeepSeek 网页版 LocalStorage 中的 userToken。以 Authorization: Bearer <token> 形式随请求发送。
+
+Token 会过期。过期后本模块返回失败，需手动更新环境变量。
+
+联网机制
+DeepSeek 网页版有联网搜索能力，但分两层：
+
+权限层：请求体中 search_enabled=true。不给这个字段，服务端不下发搜索工具。
+
+意图层：DeepSeek AI 自行决定是否真的调用搜索。
+
+本模块固定传 search_enabled=true，放开权限层。是否真的搜索由 DeepSeek AI 判断。普通寒暄不触发搜索，实时信息类问题触发搜索。
+
+联网命中时，响应包含搜索结果与引用来源。本模块把引用来源附在回复末尾。
+
+关键事实：联网不靠 prompt 关键词触发，靠请求体字段。在 prompt 里加"请联网搜索"不会生效。
+
+会话机制
+按用户标识维护独立会话，续接多轮上下文。
+
+会话状态：(chat_session_id, parent_message_id)。每次成功对话后更新。
+
+会话有服务端 TTL。超时后自动重建，旧上下文不可恢复。
+
+PoW 挑战
+服务端强制校验 PoW（Proof of Work）响应头。缺失该头，请求被拒。
+
+PoW 算法为 DeepSeekHashV1。求解需要专用 wasm 文件。
+
+对外接口
+ask_web_deepseek(prompt, user_id, timeout_seconds) — 发送消息，返回回复文本
+
+is_enabled() — 通道是否启用
+
+get_api_key() — 读取认证 token
+
+close() — 关闭通道
+
+接口语义：调用方传入消息文本，本模块返回回复字符串。失败时抛出异常，由调用方决定是否降级到主通道。
+
+依赖
+Python：aiohttp（HTTP 客户端）
+
+Node.js：用于执行 PoW 求解脚本
+
+wasm 文件：DeepSeekHashV1 求解器。需要外部提供，路径由 DEEPSEEK_POW_WASM 环境变量指定
+
+日志
+web_deepseek.log，追加模式，每行一条 JSON。
+
+字段：时间戳、事件类型、用户标识、状态、耗时、失败原因。
+
+事件类型：初始化 / 调用 / 重启。
+
+失败原因分类：认证失效 / 限流 / 超时 / 空回复 / 初始化失败 / 重启失败 / 其他。
+
+已知限制
+认证会过期：Token 由网页版生成，有生命周期。过期后需手动更新。
+
+接口可能改版：逆向接口，服务端单方面改动即可导致本模块失效。
+
+无思考链：本通道不返回模型的推理过程。
+
+会话有 TTL：服务端会话约 30 分钟失效，超时后上下文丢失。
+
+PoW 强依赖：求解器 wasm 必须可用，且算法须与服务端一致。
+
+同账号并发单输出：DeepSeek 网页版同一账号同时只能有一路输出。多个客户端共享同一 token 会互相打断。
+
+联网受 AI 意图控制：放开权限不等于一定搜索。普通对话不触发搜索。
+
+不承担关键路径：本通道的失败不影响主流程，调用方可降级到主通道。
+

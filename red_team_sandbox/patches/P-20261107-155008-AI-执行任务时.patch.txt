@@ -1,0 +1,7 @@
+# 自动草案（仅呈递，不会被执行）
+# 拦截码：UNAUTHORIZED_STARTUP
+# 被拦命令：Start-Process "C:\Windows\System32\Magnify.exe" -PassThru
+startup_whitelist:
+  add:
+    - C:\Windows\System32\Magnify.exe
+# 建议：由主人评审后写入 config_center/wcu_policy.json 并重启生效

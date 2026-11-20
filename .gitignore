@@ -29,3 +29,28 @@ models.json
 open_source.py
 backup_manifest.json
 backup_manifest.meta.json
+
+# 本地鉴权保险库（凭证严禁入库）
+secrets/
+
+# === 开源白名单（2026-11-21）===
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+node_modules/
+monitor/data/
+downloads/
+venv*/
+__pycache__/
+backups/
+secrets/

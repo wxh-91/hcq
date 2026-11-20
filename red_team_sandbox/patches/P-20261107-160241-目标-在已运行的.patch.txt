@@ -1,0 +1,15 @@
+# 建议方案：为 win_ui_automation 增加受控点击授权配置
+ui_automation:
+  click_policy:
+    allow_blind_click: false            # 保持默认关闭，盲点击继续拦截
+    window_scoped_click: true           # 新增：允许限定在目标进程窗口矩形内的点击
+    require_resolved_control: true      # 点击前必须解析出控件名/类型或明确坐标
+    target_window_process_whitelist:    # 仅限白名单进程可被窗口级点击
+      - Notepad.exe
+    max_click_retries: 0                # 被拦截后不自动重试
+    audit_log: true                     # 每次点击记录控件名、窗口矩形、命中点
+
+# 调用侧约定（授权后生效）
+# 1) 先调用 win_ui_automation(action=inspect, app_name=Notepad) 获取控件树
+# 2) 再以 action=click + control_name + control_type 精确点击
+# 3) 若控件树不可用，方允许 window_scoped_click（限定 Notepad 窗口矩形内）

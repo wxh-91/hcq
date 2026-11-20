@@ -1,0 +1,12 @@
+{
+  "id": "P-20261107-163216-目标-通过-wi",
+  "type": "whitelist_add",
+  "type_label": "应用/域名白名单扩容",
+  "description": "目标：通过 win_shell 以 PowerShell 启动 Windows 系统自带放大镜程序（C:\\Windows\\System32\\magnify.exe），供主人当场使用。\n\n卡点：命令 Start-Process \"C:\\Windows\\System32\\magnify.exe\" 被安全盾拦截，返回 UNAUTHORIZED_STARTUP（未授权启动），动作被物理中止。即当前 win_shell 的命令白名单未包含 magnify.exe / Start-Process 启动系统辅助程序这一行为。\n\n理由：放大镜是 Windows 自带的无害辅助功能程序，不涉及网络、不涉及文件写入、不涉及权限提升，仅启动一个系统 UI 进程。请授权放行该启动操作，或将该可执行文件加入 win_shell 启动白名单，以便后续同类系统辅助工具可直接调用。",
+  "patch_content": "# win_shell 命令白名单建议新增条目（whitelist_add）\nstartup_whitelist:\n  executables:\n    - path: 'C:\\Windows\\System32\\magnify.exe'\n      alias: magnify\n      note: Windows 自带放大镜（辅助功能，无网络/无提权）\n      allow_args: []\n      allow_start_process: true\n\n  # 通用放行规则（如允许整个 System32 辅助工具目录，二选一）\n  path_prefix_allow:\n    - 'C:\\Windows\\System32\\magnify.exe'\n    - 'C:\\Windows\\System32\\osk.exe'          # 屏幕键盘（同类辅助功能，可按需）\n\n  # 显式放行 PowerShell 调用形式\n  command_patterns:\n    - regex: '^Start-Process\\s+\"?C:\\\\Windows\\\\System32\\\\magnify\\.exe\"?$'\n      shell: powershell\n      action: allow\n\n# 说明：以上仅为建议片段，实际需在安全盾启动拦截规则（UNAUTHORIZED_STARTUP 判定逻辑）中合并生效。",
+  "created_at": "2026-11-07 16:32:16",
+  "status": "pending_human",
+  "applied": false,
+  "channel": "feishu",
+  "principle": "沙盒只提建议，落地必须由人类裁决"
+}

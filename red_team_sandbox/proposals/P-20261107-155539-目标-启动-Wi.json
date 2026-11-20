@@ -1,0 +1,12 @@
+{
+  "id": "P-20261107-155539-目标-启动-Wi",
+  "type": "whitelist_add",
+  "type_label": "应用/域名白名单扩容",
+  "description": "目标：启动 Windows 宿主上的系统放大镜程序 C:\\Windows\\System32\\Magnify.exe，用于验证该辅助功能程序能否正常拉起。\n卡点：执行 Start-Process 时被安全盾拦截，错误码 UNAUTHORIZED_STARTUP，动作被物理中止。win_shell 的启动白名单未包含 System32 下的系统可执行文件，导致连只读验证后的正常启动也一并被拦。\n理由：Magnify.exe 是 Windows 自带签名组件（微软官方路径 + 数字签名），非下载/第三方二进制；本次操作仅为前台启动 GUI 进程，不涉及注册表写入、服务安装、提权或持久化。建议对 C:\\Windows\\System32\\ 下已通过 Authenticode 签名的系统组件开放启动白名单，或至少对 Magnify.exe 单点放行，并保留启动日志审计。",
+  "patch_content": "# 建议配置片段：win_shell 启动白名单（config/startup_whitelist.yaml）\nstartup_whitelist:\n  allow_signed_system_binaries: true          # 放行 Windows 目录下签名二进制\n  signed_dirs:\n    - 'C:\\Windows\\System32\\'\n    - 'C:\\Windows\\SysWOW64\\'\n  require_authenticode: true                   # 必须通过 Authenticode 校验\n  require_publisher: 'Microsoft Windows'       # 限定发布者\n  block_if_writable_by_user: true              # 目录对普通用户可写则拒绝\n  explicit_allow:\n    - path: 'C:\\Windows\\System32\\Magnify.exe'\n      reason: '系统辅助功能组件，只读启动，不写注册表'\n      max_instances: 1\n      audit: true\n  audit_log: 'logs/startup_audit.log'\n  deny_patterns:\n    - '*\\Temp\\*'\n    - '*\\Downloads\\*'\n    - '*\\AppData\\Local\\Temp\\*'\n\n# 拦截逻辑伪代码\n# 1. 解析目标路径 -> 规范化绝对路径，拒绝含 .. 或 symlink 绕行\n# 2. 若父目录在 signed_dirs 且 require_authenticode -> 校验签名与发布者\n# 3. 命中 explicit_allow -> 放行并写 audit_log\n# 4. 其余场景维持 UNAUTHORIZED_STARTUP",
+  "created_at": "2026-11-07 15:55:39",
+  "status": "pending_human",
+  "applied": false,
+  "channel": "feishu",
+  "principle": "红队只提建议，落地必须由人类裁决"
+}

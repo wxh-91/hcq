@@ -1,0 +1,4 @@
+# 自动草案（仅呈递，不会被执行）
+# 拦截码：UNAUTHORIZED_STARTUP
+# 被拦命令：Stop-Process -Id 18104 -ErrorAction SilentlyContinue; Get-Process -Name Notepad,Magnify -ErrorAction SilentlyContinue | Select-Object Id,ProcessName
+# 建议：由主人评审后写入 config_center/wcu_policy.json 并重启生效

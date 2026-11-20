@@ -1,0 +1,25 @@
+# 建议配置片段：win_shell 启动白名单（config/startup_whitelist.yaml）
+startup_whitelist:
+  allow_signed_system_binaries: true          # 放行 Windows 目录下签名二进制
+  signed_dirs:
+    - 'C:\Windows\System32\'
+    - 'C:\Windows\SysWOW64\'
+  require_authenticode: true                   # 必须通过 Authenticode 校验
+  require_publisher: 'Microsoft Windows'       # 限定发布者
+  block_if_writable_by_user: true              # 目录对普通用户可写则拒绝
+  explicit_allow:
+    - path: 'C:\Windows\System32\Magnify.exe'
+      reason: '系统辅助功能组件，只读启动，不写注册表'
+      max_instances: 1
+      audit: true
+  audit_log: 'logs/startup_audit.log'
+  deny_patterns:
+    - '*\Temp\*'
+    - '*\Downloads\*'
+    - '*\AppData\Local\Temp\*'
+
+# 拦截逻辑伪代码
+# 1. 解析目标路径 -> 规范化绝对路径，拒绝含 .. 或 symlink 绕行
+# 2. 若父目录在 signed_dirs 且 require_authenticode -> 校验签名与发布者
+# 3. 命中 explicit_allow -> 放行并写 audit_log
+# 4. 其余场景维持 UNAUTHORIZED_STARTUP

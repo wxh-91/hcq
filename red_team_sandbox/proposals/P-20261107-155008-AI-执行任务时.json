@@ -1,0 +1,12 @@
+{
+  "id": "P-20261107-155008-AI-执行任务时",
+  "type": "whitelist_add",
+  "type_label": "应用/域名白名单扩容",
+  "description": "AI 执行任务时被安全盾拦截，拦截码 UNAUTHORIZED_STARTUP。\n卡点：AUP错误: UNAUTHORIZED_STARTUP | 命令行启动「C:\\Windows\\System32\\Magnify.exe」已被拦截：它不在 allowed_apps 白名单内，且你本轮原话没有点名要求启动它。\n本议案由系统在模型未自行呈递时自动起草（内容取自实际被拦记录），请求主人裁定是否放权。",
+  "patch_content": "# 自动草案（仅呈递，不会被执行）\n# 拦截码：UNAUTHORIZED_STARTUP\n# 被拦命令：Start-Process \"C:\\Windows\\System32\\Magnify.exe\" -PassThru\nstartup_whitelist:\n  add:\n    - C:\\Windows\\System32\\Magnify.exe\n# 建议：由主人评审后写入 config_center/wcu_policy.json 并重启生效",
+  "created_at": "2026-11-07 15:50:08",
+  "status": "pending_human",
+  "applied": false,
+  "channel": "feishu",
+  "principle": "红队只提建议，落地必须由人类裁决"
+}

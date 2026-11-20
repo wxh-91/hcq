@@ -47,6 +47,7 @@ class MemoryRecord:
         )
 
 logger = logging.getLogger(__name__)
+from config_center import get_config
 
 DEFAULT_MEMORY = {
     "admin_list": [DEFAULT_ADMIN],
@@ -217,6 +218,10 @@ class Memory:
             created_at=now,
             last_accessed_at=now,
         ).to_dict())
+        # 中央控制台：长期记忆上限截断（保留最近 N 条）
+        _max_records = get_config("MAX_MEMORY_RECORDS", 100)
+        if len(records) > _max_records:
+            records = records[-_max_records:]
         self.set('memories', records)
         return f"已记住：{memory_text}"
 
@@ -251,11 +256,16 @@ class Memory:
                     )
                     if r.get("status") in ("dormant", "fading"):
                         r["status"] = "active"
-                    matched.append(content)
+                    matched.append(r)
                     break
 
         self.set('memories', records)
-        return matched
+        # 遗忘曲线排序：confidence 降序，同分按 access_count 降序（权重最高者最先进入 AI 视野）
+        matched.sort(
+            key=lambda r: (r.get("confidence", 0.0), r.get("access_count", 0)),
+            reverse=True,
+        )
+        return [r.get("content", "") for r in matched]
 
     def forget_memory(self, keyword: str) -> str:
         """删除包含关键词的记忆（模糊匹配）"""

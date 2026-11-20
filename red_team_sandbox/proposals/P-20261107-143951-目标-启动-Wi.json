@@ -1,0 +1,12 @@
+{
+  "id": "P-20261107-143951-目标-启动-Wi",
+  "type": "whitelist_add",
+  "type_label": "应用/域名白名单扩容",
+  "description": "目标：启动 Windows 宿主自带的系统无障碍辅助程序（本次为系统放大镜 C:\\Windows\\System32\\Magnify.exe），验证宿主侧启动链路是否可用。\n\n卡点：win_shell 执行 `start \"\" \"C:\\Windows\\System32\\Magnify.exe\"` 时被安全盾拦截，返回 error_code=UNAUTHORIZED_STARTUP，动作被物理中止。按红队通道要求，不重试、不换路径、不做按键模拟绕行。\n\n理由：主人需要确认宿主侧能否拉起系统自带的辅助功能程序；Magnify.exe 属于微软签名的系统组件，只读运行、不写系统目录、不涉及支付与凭证，风险可控。请授权将系统辅助工具目录下的签名程序列入启动白名单。\n\n建议配置片段（示例，字段名按实际白名单 schema 调整）：\n\nstartup_whitelist:\n  - name: windows_accessibility_tools\n    paths:\n      - \"C:\\\\Windows\\\\System32\\\\Magnify.exe\"      # 放大镜\n      - \"C:\\\\Windows\\\\System32\\\\Narrator.exe\"     # 讲述人\n      - \"C:\\\\Windows\\\\System32\\\\osk.exe\"          # 屏幕键盘\n      - \"C:\\\\Windows\\\\System32\\\\utilman.exe\"      # 辅助功能管理器\n    constraints:\n      require_signature: microsoft\n      allow_admin_privilege: false\n      max_instances: 1\n      audit_log: true\n\n改造方案备选：若不放开白名单，可新增一个受控原子工具 launch_signed_system_tool(tool_name)，仅允许上表枚举值，内部校验 Authenticode 签名与 system32 路径前缀后再启动，并回传 PID 供主人确认。",
+  "patch_content": "startup_whitelist:\n  - name: windows_accessibility_tools\n    paths:\n      - \"C:\\\\Windows\\\\System32\\\\Magnify.exe\"\n      - \"C:\\\\Windows\\\\System32\\\\Narrator.exe\"\n      - \"C:\\\\Windows\\\\System32\\\\osk.exe\"\n      - \"C:\\\\Windows\\\\System32\\\\utilman.exe\"\n    constraints:\n      require_signature: microsoft\n      allow_admin_privilege: false\n      max_instances: 1\n      audit_log: true",
+  "created_at": "2026-11-07 14:39:51",
+  "status": "pending_human",
+  "applied": false,
+  "channel": "feishu",
+  "principle": "红队只提建议，落地必须由人类裁决"
+}

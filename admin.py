@@ -1,25 +1,34 @@
+import os
 import re
 import asyncio, aiofiles
 import shutil
 import json
 import time
+import threading
 import logging
 logger = logging.getLogger(__name__)
-from memory import Memory
-from cl import DEFAULT_ADMIN
+try:  # 业务埋点（导入失败不影响主流程）
+    from monitor import metrics as _qm
+except Exception:
+    _qm = None
+from import_center import get_service
+from cl import DEFAULT_ADMIN, is_main_admin
 # 导入工具函数
-from bot_utils.downloader import download_m3u8
-from bot_utils.wj import backup_project, read_file, write_file, delete_line, replace_line, insert_line
-from bot_utils.xt import system_status, execute_shell, ping_host
-from bot_utils.admin_gh import add_admin, del_admin, list_admin
-from bot_utils.tool_schema_builder import ToolSchemaBuilder, StringSchema, IntegerSchema, BooleanSchema
-from bot_utils.script_runner import run_bash_script, _fix_missing_newlines
-from bot_utils.checkin import run_checkin
-from bot_utils.episodic import recall
-from bot_utils.media import clean_media
-from memory import knowledge_db
+from plugins.core_utils.downloader import download_m3u8
+from plugins.system_ops.wj import backup_project, read_file, write_file, delete_line, replace_line, insert_line
+from plugins.system_ops.xt import system_status, ping_host
+from plugins.core_utils.aup_tools import aup_execute_shell, aup_run_bash_script
+from aup_core import AUPError, AUPResult
+from plugins.core_utils.admin_gh import add_admin, del_admin, list_admin
+from plugins.core_utils.tool_schema_builder import ToolSchemaBuilder, StringSchema, IntegerSchema, BooleanSchema
+from plugins.system_ops.script_runner import run_bash_script, _fix_missing_newlines
+from plugins.core_utils.checkin import run_checkin
+from memory_center import MemoryCenter   # 长期记忆统一出入口（episodic.log 不再直接操作）
+from plugins.core_utils.media import clean_media
+registry_manager = get_service("registry_manager")
+knowledge_db = get_service("knowledge_db")
 
-memory = Memory()
+memory = get_service("memory")
 
 async def set_group_chat_enabled(enabled: bool) -> str:
     """开启或关闭群聊功能（enabled: true/false）"""
@@ -38,7 +47,8 @@ async def agent_manager(
     task_id: str = "",
     sender_id: str = ""
 ) -> str:
-    from ai import get_conv_key, TodoListManager
+    get_conv_key = get_service("ai.get_conv_key")
+    TodoListManager = get_service("ai.TodoListManager")
     """Todo List 管理器工具"""
     # 获取当前会话 ID（通过 sender_id 推断）
     # 注意：此处简化，实际使用时需从上下文中获取 session_id
@@ -89,7 +99,7 @@ async def query_knowledge(keyword: str) -> str:
 
 async def recall_conversation(keyword: str) -> str:
     """检索今天的历史对话内容（含闲聊、工具调用、工具结果）"""
-    results = recall(keyword, limit=20)
+    results = MemoryCenter.recall_long_term(keyword, limit=20)
     if not results:
         return f"今天没有找到与「{keyword}」相关的对话记录"
     lines = [f"找到 {len(results)} 条相关记录："]
@@ -103,161 +113,15 @@ async def recall_conversation(keyword: str) -> str:
 async def clean_media_tool(scope: str = "both") -> str:
     """清理 mp4/mp3 文件。scope 可选：downloads、robot、both"""
     return clean_media(scope)
-# ========== 工具注册表（AI 可调用） ==========
-TOOLS = {
-    "checkin": {
-        "func": run_checkin,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {}
-    },
-    "query_knowledge": {
-        "func": query_knowledge,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {"keyword": "要搜索的关键词"}
-    },
-    "recall_conversation": {
-        "func": recall_conversation,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {
-            "keyword": "检索关键词。必须从用户原话中摘取实际出现过的词（如用户说'今天执行过什么命令'，就取'执行'），不要概括成抽象词（如'命令'）"
-        }
-    },
-    "clean_media": {
-        "func": clean_media_tool,
-        "need_confirm": True,
-        "is_danger": True,
-        "params_desc": {
-            "scope": "清理范围：downloads（清空下载目录）、robot（删除根目录mp4/mp3）、both（两者都做）。当用户说'所有'、'全部'、'所有MP4和MP3'时，scope 必须为 both"
-        }
-    },
-    "get_xmkj": {
-        "func": get_xmkj,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {}
-    },
-    "agent_manager": {
-        "func": agent_manager,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {
-            "action": "操作类型：list（查看清单）、add（添加任务）、execute（执行任务）、status（查看状态）",
-            "description": "任务描述（action=add 时必填）",
-            "task_id": "任务ID（action=execute/status 时必填）"
-        }
-    },
-    "read_file": {
-        "func": read_file,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {
-            "filepath": "要读取的文件路径（相对于项目根目录）",
-            "max_len": "最大返回字符数，默认12000"
-        }
-    },
-    "write_file": {
-        "func": write_file,
-        "need_confirm": True,
-        "is_danger": True,
-        "params_desc": {
-            "filepath": "文件绝对路径或相对路径（如 ~/robot/rt.py），严禁包含'创建一个名为'、'在...目录'等中文描述，只输出纯路径！",
-            "content": "要写入的完整内容",
-            "backup": "是否自动备份原文件，默认True"
-        }
-    },
-    "replace_line": {
-        "func": replace_line,
-        "need_confirm": True,
-        "is_danger": True,
-        "params_desc": {
-            "filepath": "文件路径",
-            "line_num": "要替换的行号（从1开始）",
-            "new_content": "新行内容"
-        }
-    },
-    "delete_line": {
-        "func": delete_line,
-        "need_confirm": True,
-        "is_danger": True,
-        "params_desc": {
-            "filepath": "文件路径",
-            "line_num": "要删除的行号（从1开始）"
-        }
-    },
-    "ping_host": {
-        "func": ping_host,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {"host": "要检测的主机名或IP地址"}
-    },
-    "insert_line": {
-        "func": insert_line,
-        "need_confirm": True,
-        "is_danger": True,
-        "params_desc": {
-            "filepath": "文件路径",
-            "line_num": "要在哪一行前插入（有效范围 1~行数+1）",
-            "new_content": "新行内容"
-        }
-    },
-    "backup_project": {"func": backup_project, "need_confirm": False, "is_danger": False, "params_desc": {}},
-    "execute_shell": {
-        "func": execute_shell,
-        "need_confirm": True,
-        "is_danger": True,
-        "params_desc": {"cmd": "要执行的Shell命令"}
-    },
-    "system_status": {"func": system_status, "need_confirm": False, "is_danger": False, "params_desc": {}},
-    "list_admin": {"func": list_admin, "need_confirm": False, "is_danger": False, "params_desc": {}},
-    "add_admin": {
-        "func": add_admin,
-        "need_confirm": True,
-        "is_danger": False,
-        "params_desc": {
-            "sender_id": "发起操作的管理员QQ号（系统自动注入）",
-            "new_admin": "要添加的新管理员QQ号"
-        }
-    },
-    "del_admin": {
-        "func": del_admin,
-        "need_confirm": True,
-        "is_danger": False,
-        "params_desc": {
-            "sender_id": "发起操作的管理员QQ号（系统自动注入）",
-            "del_admin": "要删除的管理员QQ号"
-        }
-    },
-    "set_group_chat_enabled": {
-        "func": set_group_chat_enabled,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {"enabled": "是否开启群聊功能（true=开启，false=关闭）"}
-    },
 
-    "get_group_chat_status": {"func": get_group_chat_status, "need_confirm": False, "is_danger": False, "params_desc": {}},
-    "download_m3u8": {
-        "func": download_m3u8,
-        "need_confirm": False,
-        "is_danger": False,
-        "params_desc": {
-            "url": "m3u8视频流链接（必填）",
-            "referer": "来源防盗链地址（可选，不填自动补全）",
-            "output_name": "输出文件名（不含后缀，可选，默认为video）"
-        }
-    },
-    "run_bash_script": {
-        "func": run_bash_script,
-        "need_confirm": True,
-        "is_danger": True,
-        "params_desc": {
-            "script_content": "要执行的多行 Bash 脚本内容（纯文本）",
-            "timeout": "超时秒数，默认30，可选"
-        }
-    },
-}
+async def checkin_tool() -> str:
+    """签到工具（受 CHECKIN_ENABLED 开关控制）"""
+    from cl import CHECKIN_ENABLED
+    if not CHECKIN_ENABLED:
+        return "签到功能已停用"
+    return await run_checkin()
+# 工具注册表（AI 可调用）：数据源为注册网关（SQLite 元数据），此处仅为 dict 形态兼容视图
+TOOLS = registry_manager.build_compat_view()
 
 # ========== 快速硬指令（不走 AI，直接执行） ==========
 FAST_COMMANDS = {
@@ -341,15 +205,18 @@ def _get_tool_default_desc(tool_name: str) -> str:
         "del_admin": "删除管理员（参数：QQ号）",
         "set_group_chat_enabled": "开启或关闭群聊功能",
         "get_group_chat_status": "查询当前群聊功能状态",
-        "download_m3u8": "从m3u8链接下载视频，支持加密流自动解密合并。参数：url(必填)、referer(可选)、output_name(可选)",
+        "download_m3u8": "从m3u8链接下载视频，支持加密流自动解密合并；长清单转入后台任务返回 task_id。参数：url(必填)、referer(可选)、output_name(可选)",
+        "download_task_status": "查询后台 m3u8 下载任务的进度、结果路径或失败原因。参数：task_id(必填)",
         "run_bash_script": "执行AI动态生成的多行Bash脚本（高危，支持超时控制）",
     }
     return default_descs.get(tool_name, "无描述")
 
 async def _call_tool_router(user_input: str, sender_id: str) -> dict | None:
     """使用 OpenAI function calling 进行工具路由"""
+    # [fix] 动态刷新注册视图：兼容运行期新注册入库的工具（注册在 ai.py 导入时，晚于 admin 模块加载）
+    tools_view = registry_manager.build_compat_view()
     tools = []
-    for name, info in TOOLS.items():
+    for name, info in tools_view.items():
         func = info["func"]
         params_desc = info.get("params_desc", {})
         schema = build_tool_schema(name, func, params_desc)
@@ -360,7 +227,7 @@ async def _call_tool_router(user_input: str, sender_id: str) -> dict | None:
         {"role": "user", "content": user_input}
     ]
     
-    from ai import safe_api_request
+    safe_api_request = get_service("ai.safe_api_request")
     content, tool_calls = await safe_api_request(messages, tools=tools, tool_choice="auto")
     
     # 以下逻辑不变
@@ -375,6 +242,9 @@ async def _call_tool_router(user_input: str, sender_id: str) -> dict | None:
             args = {}
         if tool_name and tool_name in TOOLS:
             return {"tool": tool_name, "args": args}
+        if tool_name:
+            # [防呆] AI 调用了不存在的工具名：显式标记，让执行层报错并要求重试
+            return {"tool": "__missing__", "args": {"name": tool_name}}
     return None
 
 async def _execute_admin_command(cmd: str, sender_id: str, chat_type: str = "private", group_id: str = "") -> str | None:
@@ -385,7 +255,7 @@ async def _execute_admin_command(cmd: str, sender_id: str, chat_type: str = "pri
         return get_help_text()
 
     if cmd in FAST_COMMANDS:
-        if str(sender_id) != DEFAULT_ADMIN:
+        if not is_main_admin(sender_id):
             return "权限不足"
         func = FAST_COMMANDS[cmd]
         if asyncio.iscoroutinefunction(func):
@@ -399,7 +269,7 @@ async def _execute_admin_command(cmd: str, sender_id: str, chat_type: str = "pri
         question = cmd[2:].strip()
         if not question:
             return "你想问什么？"
-        from ai import ask_ai
+        ask_ai = get_service("ai.ask_ai")
         # 需要从外部传入 chat_type 和 group_id，因此需修改函数签名
         # 建议将 _execute_admin_command 增加参数 chat_type="private", group_id=""
         answer = await ask_ai(sender_id, question, chat_type, group_id)
@@ -412,34 +282,19 @@ async def _execute_admin_command(cmd: str, sender_id: str, chat_type: str = "pri
         return None
     tool_name = route_result["tool"]
     args = route_result["args"]
+    if tool_name == "__missing__":
+        missing = args.get("name", "?")
+        return f"AI 调用了不存在的工具「{missing}」，请重新生成正确的工具调用（先查看可用工具列表再选择）"
     logger.debug(f"准备执行工具: {tool_name}, 参数: {args}")
 
-    tool = TOOLS[tool_name]
-    func = tool["func"]
-    logger.debug(f"实际执行函数: {func.__name__}")
-    if tool_name in ["add_admin", "del_admin"]:
-        args["sender_id"] = sender_id
-    
-    try:
-        if asyncio.iscoroutinefunction(func):
-            result = await func(**args)
-        else:
-            result = func(**args)
-        logger.debug(f"工具执行完成，结果长度: {len(result) if result else 0}")
-        return result if isinstance(result, str) else str(result)
-    except TypeError as e:
-        logger.error(f"参数类型错误: {e}, 参数: {args}", exc_info=True)
-        return f"参数错误：{e}。AI 生成的参数与工具不匹配。"
-    except ValueError as e:
-        logger.error(f"参数值错误: {e}, 参数: {args}", exc_info=True)
-        return f"参数值错误：{e}"
-    except Exception as e:
-        logger.error(f"工具执行异常: {e}, 工具: {tool_name}", exc_info=True)
-        return f"执行失败：{str(e)}"
+    # [AUP-集成] 统一执行边界：所有工具调用收敛到 execute_tool_directly
+    # （AUP 协议渲染 / 参数过滤与类型转换 / 权限校验 / 审计日志 / 降级链）
+    # 消除旧直连旁路：此前直接 func(**args) 会绕过 AUP 边界并对 AUPResult 崩溃
+    return await execute_tool_directly(tool_name, args, sender_id)
 
 async def handle_admin_command(raw_input, sender_id, force_tool_route=False, chat_type="private", group_id=""):
     logger.debug(f"handle_admin_command 被调用，raw_input={raw_input}")
-    is_super_admin = str(sender_id) == DEFAULT_ADMIN
+    is_super_admin = is_main_admin(sender_id)
     is_normal_admin = memory.is_admin(sender_id) and not is_super_admin
 
     if not is_super_admin and not is_normal_admin:
@@ -463,6 +318,214 @@ async def handle_admin_command(raw_input, sender_id, force_tool_route=False, cha
 
     return None
 
+
+def _render_aup_result(res: "AUPResult") -> str:
+    """AUP 协议渲染：解析 status/data/error_code/fallback_chain/suggestion -> 结构化字符串。
+
+    这是新老体系合并的关键边界——AI 与硬指令拿到的是解析后的 AUP 语义，
+    而非裸 dataclass repr 或旧版裸字符串。
+    """
+    if res.status == "ok":
+        if isinstance(res.data, dict):
+            core = "\n".join("%s: %s" % (k, v) for k, v in res.data.items())
+        else:
+            core = str(res.data)
+        chain = ("\n[降级链路] " + " -> ".join(res.fallback_chain)) if res.fallback_chain else ""
+        return "✅ 执行成功 (status=ok, error_code=%s)\n%s%s" % (res.error_code, core, chain)
+    return "❌ 执行失败 (status=error, error_code=%s)\n%s%s" % (
+        res.error_code,
+        res.suggestion or str(res.data) or "无详细信息",
+        ("\n[降级链路] " + " -> ".join(res.fallback_chain)) if res.fallback_chain else "",
+    )
+
+
+# ===== [生态收敛] 工具级心跳：任何工具执行 >60s 自动通知（不限神授模式） =====
+TOOL_HEARTBEAT_INTERVAL = 60.0
+_heartbeat_cb = None  # 由上层（dz.py）注册回调，发送飞书心跳
+
+
+def set_heartbeat_callback(cb):
+    """注册心跳回调（async callable，接收心跳消息文本）。"""
+    global _heartbeat_cb
+    _heartbeat_cb = cb
+
+
+# ---- Debug Console：真实活跃工具队列 ----
+_ACTIVE_TOOLS: list[dict] = []
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE_SEQ = 0
+
+
+def _active_begin(tool_name: str, sender: str = "") -> int:
+    global _ACTIVE_SEQ
+    _ACTIVE_SEQ += 1
+    entry = {
+        "id": _ACTIVE_SEQ,
+        "tool": tool_name,
+        "sender": str(sender or ""),
+        "started_at": time.strftime("%H:%M:%S"),
+        "start_ts": time.time(),
+    }
+    with _ACTIVE_LOCK:
+        _ACTIVE_TOOLS.append(entry)
+    return entry["id"]
+
+
+def _active_end(entry_id: int) -> None:
+    with _ACTIVE_LOCK:
+        for i, item in enumerate(_ACTIVE_TOOLS):
+            if item.get("id") == entry_id:
+                _ACTIVE_TOOLS.pop(i)
+                break
+
+
+def debug_active_tools() -> list[dict]:
+    now = time.time()
+    with _ACTIVE_LOCK:
+        return [{
+            "tool": item.get("tool"),
+            "sender": item.get("sender"),
+            "started_at": item.get("started_at"),
+            "elapsed_sec": round(now - float(item.get("start_ts") or now), 2),
+        } for item in _ACTIVE_TOOLS]
+
+
+async def _await_with_heartbeat(tool_name: str, coro):
+    """等待协程完成；每 60s 未完成则触发一次心跳回调，直到完成。"""
+    active_id = _active_begin(tool_name)
+    try:
+        task = asyncio.ensure_future(coro)
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=TOOL_HEARTBEAT_INTERVAL)
+            if task in done:
+                return task.result()
+            if _heartbeat_cb is not None:
+                try:
+                    await _heartbeat_cb(f"[心跳] 工具 {tool_name} 仍在执行中...")
+                except Exception as _e:
+                    logger.warning("[心跳] 发送失败: %s", _e)
+    finally:
+        _active_end(active_id)
+
+
+def _normalize_tool_args(args):
+    """[Parameter Normalization] LLM 多包一层 args/kwargs → 智能解包。
+
+    模型调用工具时偶尔把真实参数包成 {"args": {...}} / {"kwargs": "{\"...\": ...}"}
+    形态，导致 AUP 校验 required 缺失而 INVALID_ARGUMENT。规则：
+    - 仅当 args 的所有键都落在 {args, kwargs} 内（纯包裹形态）才解包；
+    - 内层值为 dict 直接提取；值为 JSON 字符串则解析后提取；
+    - 解包结果若仍是纯包裹形态，递归再拍平一层，防止双重嵌套。
+    正常调用（如 {"query": "..."}）不满足条件，原样返回。
+    """
+    if not isinstance(args, dict) or not args:
+        return args
+    keys = set(args.keys())
+    if not (keys <= {"args", "kwargs"}) or not keys:
+        return args
+    inner = {}
+    for wk in ("args", "kwargs"):
+        if wk not in args:
+            continue
+        v = args[wk]
+        if isinstance(v, dict):
+            inner.update(v)
+        elif isinstance(v, str):
+            try:
+                jv = json.loads(v)
+                if isinstance(jv, dict):
+                    inner.update(jv)
+            except Exception:
+                pass
+    if not inner:
+        return args
+    iks = set(inner.keys())
+    if iks and iks <= {"args", "kwargs"}:
+        return _normalize_tool_args(inner)
+    return inner
+
+
+# ===== [Param Align] 语义同义参数强制对齐：模型写 script / script_content 也必须能调通 =====
+_SYNONYM_GROUPS = [
+    # 执行命令类
+    ("cmd", {"command", "shell_command", "script", "script_content", "code", "cmdline",
+             "shell", "bash", "program", "exec", "command_line", "cmd_str", "script_text"}),
+    # 脚本内容类
+    ("script_content", {"script", "code", "bash", "content", "body", "script_text", "cmd"}),
+    # 路径类
+    ("filepath", {"path", "file", "file_path", "filename", "file_name", "target",
+                  "target_path", "dest", "dest_path", "save_path", "output", "out",
+                  "directory", "dir"}),
+    # 文本内容类
+    ("content", {"text", "body", "data", "value", "new_content", "contents"}),
+    # 链接类
+    ("url", {"link", "href", "video_url", "page_url", "target_url", "uri"}),
+    # 其他常见
+    ("line_num", {"line", "line_number", "lineno"}),
+    ("pattern", {"keyword", "query", "search", "regex", "needle"}),
+    ("name", {"task_name", "title", "name_str"}),
+]
+
+
+def _norm_key(k: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(k).lower())
+
+
+_SYN_LOOKUP = {}
+for _canon, _alts in _SYNONYM_GROUPS:
+    for _a in _alts:
+        _SYN_LOOKUP.setdefault(_norm_key(_a), set()).add(_canon)
+
+
+def _normalize_args(args: dict, valid_param_names: set) -> dict:
+    """按签名强制对齐参数：同名/同义/大小写下划线差异全部归一到签名参数名，避免"语义相同却报缺参"。"""
+    used, out = set(), {}
+    norm_valid = {_norm_key(n): n for n in valid_param_names}
+    for k, v in args.items():
+        nk = _norm_key(k)
+        target = norm_valid.get(nk)
+        if target is None:
+            for canon in _SYN_LOOKUP.get(nk, ()):
+                if canon in valid_param_names and canon not in out and k not in valid_param_names:
+                    target = canon
+                    break
+        if target is None:
+            out[k] = v
+        else:
+            out.setdefault(target, v)
+        used.add(k)
+    # 仍未提供的关键参数：从剩余别名里再兜一次
+    for canon, alts in _SYNONYM_GROUPS:
+        if canon in valid_param_names and canon not in out:
+            for a in sorted(alts):
+                for k, v in args.items():
+                    if _norm_key(k) == _norm_key(a):
+                        out[canon] = v
+                        break
+                if canon in out:
+                    break
+    return out
+
+
+# 全盘扫描类命令：会阻塞全局事件循环，底层直接拒绝
+_BLOCKED_SHELL_PAT = re.compile(
+    r"(?:\bfind\s+/(?:\s|$|\|)|"
+    r"\bdu\s+-[a-zA-Z]*\s*/(?:\s|$|\|)|"
+    r"\bls\s+-[a-zA-Z]*[Rr][a-zA-Z]*\s*/(?:\s|$|\|)|"
+    r"\bgrep\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+[^\n|]*\s/(?:\s|$|\|)|"
+    r"\blocate\s+|"
+    r"\btar\s+-[a-zA-Z]*[cC][a-zA-Z]*[fF]\s+[^\n|]*\s/(?:\s|$|\|))"
+)
+
+
+def _pick_cmd(args: dict) -> str:
+    for k in ("cmd", "command", "shell_command", "script", "script_content", "code", "cmdline", "shell"):
+        v = args.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
+
+
 async def execute_tool_directly(
     tool_name: str, args: dict, sender_id: str
 ) -> str:
@@ -472,44 +535,88 @@ async def execute_tool_directly(
             args = json.loads(args)
         except json.JSONDecodeError:
             return "参数格式错误：无法解析 JSON 字符串"
+    # [Parameter Normalization] LLM 多包一层 args/kwargs 时智能解包
+    args = _normalize_tool_args(args)
 
-    if tool_name == "execute_shell":
-        arg_key = "cmd"
-    elif tool_name == "run_bash_script":
-        arg_key = "script_content"
-    else:
-        arg_key = None
+    # [配置保护] settings.py / wcu_policy.json 只读死命令（代码层，先于一切工具执行）
+    try:
+        from plugins.proposal_center.guard import violation as _ro_violation
+        _ro_msg = _ro_violation(tool_name, args)
+        if _ro_msg:
+            return _ro_msg
+    except Exception as _ro_err:
+        logger.warning("[配置保护] 只读守卫异常: %s", _ro_err)
 
-    if arg_key and arg_key in args:
-        cmd = args[arg_key]
-        if isinstance(cmd, str):
-            args[arg_key] = _fix_missing_newlines(cmd)
+    if tool_name in ("execute_shell", "aup_execute_shell", "run_bash_script"):
+        arg_key = "script_content" if tool_name == "run_bash_script" else "cmd"
+        _c = _pick_cmd(args)
+        if isinstance(_c, str) and _c:
+            args[arg_key] = _fix_missing_newlines(_c)
     import inspect
-    tool = TOOLS.get(tool_name)
+    tool = registry_manager.get_tool_info(tool_name)
     if not tool:
         return f"未知工具：{tool_name}"
+    if not tool.get("is_active", True):
+        return f"工具已下线：{tool_name}"
     # [large-task] 安全防火墙：权限检查和审计日志
-    from bot_utils.security import check_permission, log_audit
+    from plugins.core_utils.security import (
+        check_permission, check_tool_roles, check_search_budget, log_audit,
+    )
 
     allowed, reason = check_permission(tool_name, sender_id, DEFAULT_ADMIN)
+    if allowed:
+        allowed, reason = check_tool_roles(tool_name, tool.get("roles") or [], sender_id)
+    if allowed:
+        allowed, reason = check_search_budget(tool_name, sender_id)
     if not allowed:
-        log_audit(tool_name, args, sender_id, reason, 0.0, "denied")
-        return reason
+        # AUP 协议拒绝：角色不允许执行高危工具，返回结构化 AUPResult 而非裸字符串
+        deny = AUPResult(
+            status="error",
+            data="权限不足",
+            error_code="FORBIDDEN",
+            suggestion=reason or "当前账号无该高危操作权限",
+        )
+        if _qm:
+            _qm.aup_reject()
+        log_audit(tool_name, args, sender_id, deny.to_json(), 0.0, "denied")
+        logger.info("[工具] %s | 状态: 拒绝 | 原因: %s", tool_name, reason)
+        return _render_aup_result(deny)
 
     func = tool["func"]
-    
+    # [C-End Tool Proxy fix] func 丢失兜底：AUP 装饰器只存元数据（module_path/func_name），
+    # 注册中心 func 字段为 None 时按 module_path + func_name 动态加载真实函数/wrapper
+    if func is None:
+        try:
+            mod_path = tool.get("module_path") or ""
+            func_name = tool.get("func_name") or ""
+            _mod = __import__(mod_path, fromlist=["*"])
+            # 优先按工具名取属性（func_name 可能是内部 wrapper 名，不可靠）
+            func = getattr(_mod, tool_name, None)
+            if func is None or not callable(func):
+                func = getattr(_mod, func_name, None)
+            if func is None or not callable(func):
+                raise AttributeError(f"模块 {mod_path} 中找不到可调用 {tool_name}")
+            logger.info("[execute_tool_directly] 动态加载工具 %s: %s.%s", tool_name, mod_path, func_name)
+        except Exception as _e:
+            logger.error("动态加载工具 %s 失败: %s", tool_name, _e)
+            return f"工具加载失败：{tool_name}"
+    if func is None or not callable(func):
+        return f"工具不可调用：{tool_name}"
     # ===== 特殊处理：需要注入 sender_id 的工具 =====
     if tool_name in ["add_admin", "del_admin"]:
         args["sender_id"] = sender_id
 
     # ===== 安全检测（防止 Python 代码被当作 Shell 执行） =====
-    if tool_name == "execute_shell":
-        cmd = args.get("cmd", "")
+    if tool_name in ("execute_shell", "aup_execute_shell"):
+        cmd = _pick_cmd(args)
+        if _BLOCKED_SHELL_PAT.search(cmd):
+            return ("已拦截全盘扫描命令（会阻塞全局）：请把范围限定到具体目录，"
+                    "例如 find /root/robot -maxdepth 3 -name '*.log'")
         if isinstance(cmd, str) and re.search(r'\b(import|from|def|class|if __name__)\b', cmd):
             return "检测到 Python 代码特征，execute_shell 只允许执行 Shell 命令（如 ls、cd、echo 等）"
 
     if tool_name == "run_bash_script":
-        script = args.get("script_content", "")
+        script = args.get("script_content") or _pick_cmd(args) or ""
         if isinstance(script, str) and re.search(r'\b(import|from|def|class)\b', script):
             return "检测到 Python 代码特征，run_bash_script 只用于 Bash 脚本"
 
@@ -528,16 +635,12 @@ async def execute_tool_directly(
         "content": "new_content",      # 仅对 replace_line/insert_line 生效
         "line": "line_num",
         "line_number": "line_num",
+        "command": "cmd",              # [fix] 模型常把 execute_shell 的参数写成 command
+        "shell_command": "cmd",        # [fix] 同上，兼容另一种常见写法
     }
 
-    # 1. 别名转换（条件映射）
-    normalized_args = {}
-    for k, v in args.items():
-        target = alias_map.get(k)
-        if target and target in valid_param_names and k not in valid_param_names:
-            normalized_args[target] = v
-        else:
-            normalized_args[k] = v
+    # 1. 别名归一化：签名精确名优先 → 同义组强制对齐（script / script_content → cmd 等）
+    normalized_args = _normalize_args(args, valid_param_names | set(alias_map.keys()))
     
     # 2. 只保留函数签名中存在的参数
     for param_name, param in sig.parameters.items():
@@ -559,7 +662,9 @@ async def execute_tool_directly(
                     valid_params[param_name] = args["file"]
                 else:
                     # 实在找不到就报错
-                    return f"缺少必填参数：{param_name}"
+                    _alts = sorted({a for canon, alts in _SYNONYM_GROUPS if canon == param_name for a in alts})
+                    return (f"缺少必填参数：{param_name}"
+                            + (f"（也接受：{', '.join(_alts)}）" if _alts else ""))
     # ===== 类型转换层（根据函数签名自动转换参数类型） =====
     type_hints = sig.parameters
     for param_name, param in type_hints.items():
@@ -609,51 +714,79 @@ async def execute_tool_directly(
     if tool_name in ("add_admin", "del_admin"):
         valid_params["sender_id"] = sender_id
 
+    # 工具运行期上下文：写入本轮 sender_id，供后台 Worker 回推消息定位归属会话
+    try:
+        from plugins.core_utils.trust import set_runtime
+        set_runtime(sender_id)
+    except Exception:
+        pass
+
     start_time = time.time()
     try:
         if asyncio.iscoroutinefunction(func):
-            result = await func(**valid_params)
+            result = await _await_with_heartbeat(tool_name, func(**valid_params))
         else:
-            result = func(**valid_params)
+            result = await _await_with_heartbeat(tool_name, asyncio.to_thread(func, **valid_params))
 
         elapsed = time.time() - start_time
 
         # ===== 审计日志（成功） =====
-        log_audit(tool_name, args, sender_id, str(result), elapsed, "success")
+        log_audit(tool_name, args, sender_id, result.to_json() if isinstance(result, AUPResult) else str(result), elapsed, "success")
 
         # ===== 加分：白名单工具成功执行后 +5 =====
         try:
-            from bot_utils.scores import add_score
+            from plugins.core_utils.scores import add_score
             add_score(tool_name)
         except Exception as e:
             logger.error(f"[加分] 失败: {e}", exc_info=True)
 
+        if _qm:
+            _qm.tool_ok(elapsed * 1000.0)
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 成功")
 
         if result is None:
             return "执行完成（无输出）"
+        # [AUP-集成] 协议渲染边界：AUPResult -> 结构化字符串（解析 status/data/error_code）
+        if isinstance(result, AUPResult):
+            return _render_aup_result(result)
         return result if isinstance(result, str) else str(result)
+    except AUPError as e:
+        # [AUP-集成] 协议异常专属渲染：AUPError -> AUPResult -> 结构化字符串
+        elapsed = time.time() - start_time
+        log_audit(tool_name, args, sender_id, e.to_result().to_json(), elapsed, "failed")
+        if _qm:
+            _qm.tool_fail(elapsed * 1000.0)
+        logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | AUP错误: {e.error_code}")
+        return _render_aup_result(e.to_result())
     except TypeError as e:
         elapsed = time.time() - start_time
         log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
+        if _qm:
+            _qm.tool_fail(elapsed * 1000.0)
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: 参数类型错误")
         logger.error(f"参数类型错误: {e}, 传入: {args}, 有效: {valid_params}", exc_info=True)
         return f"参数错误：{e}\n传入参数：{args}\n有效参数：{valid_params}"
     except ValueError as e:
         elapsed = time.time() - start_time
         log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
+        if _qm:
+            _qm.tool_fail(elapsed * 1000.0)
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: 参数值错误")
         logger.error(f"参数值错误: {e}, 传入: {args}, 有效: {valid_params}", exc_info=True)
         return f"参数值错误：{e}"
     except asyncio.TimeoutError as e:
         elapsed = time.time() - start_time
         log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
+        if _qm:
+            _qm.tool_fail(elapsed * 1000.0)
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: 超时")
         logger.error(f"工具执行超时: {e}, 工具: {tool_name}", exc_info=True)
         return f"工具执行超时：{str(e)}"
     except Exception as e:
         elapsed = time.time() - start_time
         log_audit(tool_name, args, sender_id, str(e), elapsed, "failed")
+        if _qm:
+            _qm.tool_fail(elapsed * 1000.0)
         logger.info(f"[工具] {tool_name} | 耗时 {elapsed:.2f}s | 状态: 失败 | 错误: {str(e)[:50]}")
         logger.error(f"工具执行异常: {e}, 工具: {tool_name}", exc_info=True)
         return f"执行失败：{str(e)}"

@@ -1,0 +1,70 @@
+{
+  "_说明": "WCU 零信任策略唯一权威源。AI 只读，任何修改必须由人类手工编辑本文件并重启服务。",
+  "_修改方式": "人类进入 WSL，nano /root/robot/config_center/wcu_policy.json，改完重启 dz.py。",
+  "zero_trust_mode": true,
+  "allowed_apps": [
+    "计算器",
+    "记事本",
+    "qq",
+    "微信",
+    "edge",
+    "chrome"
+  ],
+  "messenger_apps": [
+    "qq",
+    "微信"
+  ],
+  "mainstream_domains": [
+    "taobao.com",
+    "tmall.com",
+    "jd.com",
+    "pinduoduo.com",
+    "pdd.com",
+    "yangkeduo.com",
+    "baidu.com",
+    "bilibili.com",
+    "zhihu.com",
+    "weibo.com",
+    "douyin.com",
+    "xiaohongshu.com",
+    "qq.com",
+    "tencent.com",
+    "163.com",
+    "sohu.com",
+    "sina.com.cn",
+    "youku.com",
+    "iqiyi.com",
+    "aliyun.com",
+    "alibaba.com",
+    "1688.com",
+    "csdn.net",
+    "github.com",
+    "gitee.com",
+    "google.com",
+    "bing.com",
+    "microsoft.com",
+    "apple.com",
+    "localhost",
+    "127.0.0.1"
+  ],
+  "download_keywords": [
+    "下载",
+    "安装",
+    "保存",
+    "导出",
+    "另存为",
+    "存到"
+  ],
+  "click_risk_keywords": [
+    "下载",
+    "保存",
+    "安装",
+    "购买",
+    "支付",
+    "付款",
+    "下单",
+    "删除",
+    "卸载",
+    "格式化"
+  ]
+}

@@ -1,0 +1,73 @@
+# KULA 配置（HCQ-Core 监控专用，仅本机回环）
+global:
+  hostname: ""
+  show_system_info: true
+  show_system_details: false
+  show_version: false
+  default_theme: dark
+  easter_egg: false
+
+collection:
+  interval: 1s
+
+storage:
+  directory: /root/robot/monitor/data
+  tiers:
+    - resolution: 1s
+      max_size: 120MB
+    - resolution: 1m
+      max_size: 80MB
+    - resolution: 5m
+      max_size: 40MB
+
+backup:
+  enabled: false
+
+web:
+  enabled: true
+  ui: true
+  listen: "127.0.0.1"
+  port: 8085
+  base_path: ""
+  enable_compression: true
+  minify_assets: true
+  max_websocket_conns: 100
+  max_websocket_conns_per_ip: 5
+  trust_proxy: false
+  security:
+    headers: true
+    frame_protection: false      # 允许被 HCQ-Core 以 iframe 嵌入
+    origin_validation: true
+  join_metrics: false
+  default_aggregation: avg
+  appearance:
+    sticky_topbar: true
+    gauges: true
+  lang:
+    default: zh
+    force: true
+  logging:
+    enabled: true
+    level: "access"
+  prometheus_metrics:
+    enabled: false
+  auth:
+    enabled: false
+
+applications:
+  nginx:
+    enabled: false
+  apache2:
+    enabled: false
+  containers:
+    enabled: false
+  postgres:
+    enabled: false
+  mysql:
+    enabled: false
+
+tui:
+  refresh_rate: 1s
+
+ollama:
+  enabled: false

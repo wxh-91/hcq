@@ -1,0 +1,12 @@
+{
+  "id": "P-20261107-140107-任务-用原生-U",
+  "type": "whitelist_add",
+  "type_label": "应用/域名白名单扩容",
+  "description": "任务：用原生 UI 自动化打开 Windows 画图（mspaint）并在画布上画一笔。当前进度：mspaint 已启动（进程 PID 18040，窗口标题「无标题 - 画图」，进程名 MSPaintApp）。卡点：调用 win_ui_automation list_controls（app_name=无标题 - 画图）时被应用白名单拦截，返回 UNAUTHORIZED_APP，无法枚举画布控件、无法执行鼠标落笔动作。需要将画图加入 UI 自动化白名单后，才能继续枚举控件并在画布上绘制一笔。",
+  "patch_content": "ui_automation_whitelist:\n  - name: 画图\n    process: mspaint.exe\n    window_class: MSPaintApp\n    window_title_pattern: \"*画图*\"\n    allow_actions: [list_controls, click, drag, type_text, send_keys]\n    reason: 系统自带画图工具，需用于图形绘制类任务的 UI 自动化操作",
+  "created_at": "2026-11-07 14:01:07",
+  "status": "pending_human",
+  "applied": false,
+  "channel": "feishu",
+  "principle": "红队只提建议，落地必须由人类裁决"
+}

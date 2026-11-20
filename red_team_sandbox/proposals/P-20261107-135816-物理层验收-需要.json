@@ -1,0 +1,12 @@
+{
+  "id": "P-20261107-135816-物理层验收-需要",
+  "type": "whitelist_add",
+  "type_label": "应用/域名白名单扩容",
+  "description": "[物理层验收] 需要打开 Windows 画图(mspaint) 完成图像标注任务，但该应用不在应用白名单内，win_ui_automation 直接返回 UNAUTHORIZED_APP，任务无法继续。建议把 mspaint 加入白名单，风险可控：画图仅本地图像编辑，无联网与支付行为。",
+  "patch_content": "{\"allowed_apps\": [\"计算器\", \"记事本\", \"qq\", \"微信\", \"edge\", \"chrome\", \"mspaint\"]}",
+  "created_at": "2026-11-07 13:58:16",
+  "status": "pending_human",
+  "applied": false,
+  "channel": "feishu",
+  "principle": "红队只提建议，落地必须由人类裁决"
+}
